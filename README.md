@@ -46,5 +46,4 @@ Trainers must finish Stripe Express (charges + payouts) before clients can pay. 
 ## Notes
 
 - Do not commit `.env`. Keys belong in the host’s env, not the repo.
-- Trainer photos and gym media under `public/photos` / `public/videos` are not in this export (too large for the GitHub file API). Copy them from the live app or regenerate.
 - Cancel is free until 24 hours before the session; that path refunds Stripe (application fee + transfer reversed).
