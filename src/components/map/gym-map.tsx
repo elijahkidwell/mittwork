@@ -71,6 +71,12 @@ export function GymMap({ gyms, activeId, onSelect, origin, maxMiles }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const markersRef = useRef(new Map<string, import("leaflet").Marker>());
+  const activeRef = useRef<string | null>(activeId);
+  const iconForRef = useRef<((trainerCount: number, active: boolean) => import("leaflet").DivIcon) | null>(null);
+
+  // Rebuild markers and fit the view only when the gym list / origin / range
+  // change — not when a gym is selected (that used to reset the zoom).
   useEffect(() => {
     const map = mapRef.current;
     const layer = layerRef.current;
@@ -83,6 +89,16 @@ export function GymMap({ gyms, activeId, onSelect, origin, maxMiles }: Props) {
       if (cancelled) return;
 
       layer.clearLayers();
+      markersRef.current.clear();
+
+      const iconFor = (trainerCount: number, active: boolean) =>
+        L.divIcon({
+          className: "mitt-pin",
+          html: `<div class="mitt-pin-dot${active ? " is-active" : ""}${trainerCount ? "" : " is-place"}">${trainerCount || ""}</div>`,
+          iconSize: [28, 28],
+          iconAnchor: [14, 14],
+        });
+      iconForRef.current = iconFor;
 
       const userIcon = L.divIcon({
         className: "mitt-pin",
@@ -111,17 +127,16 @@ export function GymMap({ gyms, activeId, onSelect, origin, maxMiles }: Props) {
         : gyms[0]
           ? L.latLngBounds([[gyms[0].lat, gyms[0].lng]])
           : L.latLngBounds([[20, 0]]);
+      const active = activeRef.current;
       for (const gym of gyms) {
-        const active = gym.id === activeId;
-        const icon = L.divIcon({
-          className: "mitt-pin",
-          html: `<div class="mitt-pin-dot${active ? " is-active" : ""}${gym.trainerCount ? "" : " is-place"}">${gym.trainerCount || ""}</div>`,
-          iconSize: [28, 28],
-          iconAnchor: [14, 14],
+        const isActive = gym.id === active;
+        const marker = L.marker([gym.lat, gym.lng], {
+          icon: iconFor(gym.trainerCount, isActive),
+          zIndexOffset: isActive ? 500 : 0,
         });
-        const marker = L.marker([gym.lat, gym.lng], { icon, zIndexOffset: active ? 500 : 0 });
         marker.on("click", () => onSelectRef.current(gym.id));
         marker.addTo(layer);
+        markersRef.current.set(gym.id, marker);
         bounds.extend([gym.lat, gym.lng]);
       }
 
@@ -140,7 +155,34 @@ export function GymMap({ gyms, activeId, onSelect, origin, maxMiles }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [gyms, activeId, origin.lat, origin.lng, origin.label, origin.hasPlace, maxMiles, ready]);
+  }, [gyms, origin.lat, origin.lng, origin.hasPlace, maxMiles, ready]);
+
+  // Selecting a gym only restyles two markers and pans if it's off-screen.
+  useEffect(() => {
+    const prev = activeRef.current;
+    activeRef.current = activeId;
+    const iconFor = iconForRef.current;
+    const map = mapRef.current;
+    if (!ready || !iconFor || !map || prev === activeId) return;
+    const gymById = new Map(gyms.map((g) => [g.id, g]));
+    if (prev) {
+      const m = markersRef.current.get(prev);
+      const g = gymById.get(prev);
+      if (m && g) {
+        m.setIcon(iconFor(g.trainerCount, false));
+        m.setZIndexOffset(0);
+      }
+    }
+    if (activeId) {
+      const m = markersRef.current.get(activeId);
+      const g = gymById.get(activeId);
+      if (m && g) {
+        m.setIcon(iconFor(g.trainerCount, true));
+        m.setZIndexOffset(500);
+        if (!map.getBounds().contains(m.getLatLng())) map.panTo(m.getLatLng(), { animate: true });
+      }
+    }
+  }, [activeId, gyms, ready]);
 
   return <div ref={elRef} className="size-full min-h-[280px]" />;
 }

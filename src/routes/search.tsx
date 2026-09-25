@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { MapPin, Search as SearchIcon, Star } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BrowseRow } from "@/components/trainers/browse-row";
 import { CitySearch } from "@/components/location/city-search";
 import { Chip } from "@/components/ui/chip";
@@ -10,6 +10,9 @@ import { DISTANCE_OPTIONS, STYLES } from "@/lib/catalog";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { useOrigin } from "@/lib/origin";
 import { listGyms, listTrainers } from "@/lib/server/queries";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useDebouncedCallback } from "@/lib/use-debounced-callback";
+import { useNearbyGymsRefresh } from "@/lib/use-nearby-gyms-refresh";
 
 type Search = {
   q?: string;
@@ -50,6 +53,22 @@ function SearchPage() {
   const origin = useOrigin();
   const { user } = useCurrentUserState();
   const [locOpen, setLocOpen] = useState(false);
+  // Typing updates local state instantly; the URL (and the queries keyed on it)
+  // follow 300 ms after the last keystroke, replacing the history entry.
+  const [text, setText] = useState(search.q ?? "");
+  const committed = useRef(search.q ?? "");
+  useEffect(() => {
+    // Only adopt URL changes we didn't make ourselves (e.g. Back button).
+    const q = search.q ?? "";
+    if (q !== committed.current) {
+      committed.current = q;
+      setText(q);
+    }
+  }, [search.q]);
+  const commitText = useDebouncedCallback((value: string) => {
+    committed.current = value.trim();
+    patch({ q: value.trim() || undefined }, true);
+  }, 300);
 
   const trainers = useQuery({
     queryKey: ["trainers", search, origin.lat, origin.lng, origin.hasPlace],
@@ -69,8 +88,10 @@ function SearchPage() {
         },
       }),
   });
+  const gymMiles = search.maxMiles === 0 ? undefined : origin.hasPlace ? (search.maxMiles ?? 25) : undefined;
+  useNearbyGymsRefresh(origin, gymMiles ?? 25);
   const gyms = useQuery({
-    queryKey: ["gyms-browse", origin.lat, origin.lng, origin.hasPlace, origin.hydrated, search.q, search.maxMiles],
+    queryKey: ["gyms-browse", origin.lat, origin.lng, origin.hasPlace, search.q, gymMiles],
     enabled: origin.hydrated,
     placeholderData: (prev) => prev,
     queryFn: () =>
@@ -80,14 +101,15 @@ function SearchPage() {
           lat: origin.lat,
           lng: origin.lng,
           hasPlace: origin.hasPlace,
-          maxMiles:
-            search.maxMiles === 0 ? undefined : origin.hasPlace ? (search.maxMiles ?? 25) : undefined,
+          maxMiles: gymMiles,
+          limit: 16,
         },
       }),
   });
 
-  function patch(next: Partial<Search>) {
+  function patch(next: Partial<Search>, replace = false) {
     void navigate({
+      replace,
       search: (prev) => {
         const merged = { ...prev, ...next };
         return Object.fromEntries(
@@ -106,8 +128,11 @@ function SearchPage() {
         <div className="relative min-w-0 flex-1">
           <SearchIcon className="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-subtle" />
           <Input
-            value={search.q ?? ""}
-            onChange={(e) => patch({ q: e.target.value || undefined })}
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value);
+              commitText(e.target.value);
+            }}
             placeholder="Search trainers, gyms, or services"
             className="pl-11"
             aria-label="Search"
@@ -139,7 +164,7 @@ function SearchPage() {
         />
       )}
 
-      <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div className="chip-row">
         <Chip active={search.maxMiles == null} onClick={() => patch({ maxMiles: undefined })}>
           Nearby
         </Chip>
@@ -166,12 +191,16 @@ function SearchPage() {
 
       <section className="space-y-3">
         <h2 className="text-xs font-semibold uppercase tracking-[0.18em]">Gyms</h2>
-        {gyms.isLoading && shops.length === 0 ? (
-          <p className="text-sm text-muted">Finding gyms near you…</p>
+        {(!origin.hydrated || gyms.isPending) && shops.length === 0 ? (
+          <div className="flex gap-3 overflow-hidden" aria-label="Loading gyms">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-36 w-36 shrink-0 rounded-xl" />
+            ))}
+          </div>
         ) : shops.length === 0 ? (
           <p className="text-sm text-muted">No gyms in range yet. Set your city above, or check the map tab.</p>
         ) : (
-          <div className="flex gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="flex min-w-0 gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {shops.map((g) => (
               <Link
                 key={g.id}
@@ -180,7 +209,15 @@ function SearchPage() {
                 className="w-36 shrink-0"
               >
                 <div className="relative overflow-hidden rounded-xl bg-elevated">
-                  <img src={g.gallery[0] || g.photoUrl} alt="" className="h-36 w-full object-cover" />
+                  <img
+                    src={g.gallery[0] || g.photoUrl}
+                    alt=""
+                    width={144}
+                    height={144}
+                    loading="lazy"
+                    decoding="async"
+                    className="h-36 w-full object-cover"
+                  />
                   <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent p-2">
                     <p className="line-clamp-2 text-[13px] font-semibold leading-tight">{g.name}</p>
                   </div>
@@ -197,7 +234,13 @@ function SearchPage() {
 
       <section>
         <h2 className="text-xs font-semibold uppercase tracking-[0.18em]">Trainers</h2>
-        {list.length === 0 ? (
+        {(!origin.hydrated || trainers.isPending) && list.length === 0 ? (
+          <div className="mt-3 space-y-3" aria-label="Loading trainers">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-40 rounded-xl" />
+            ))}
+          </div>
+        ) : list.length === 0 ? (
           <p className="mt-3 text-sm text-muted">No trainers match. Clear a filter or pick a closer city.</p>
         ) : (
           <ul className="divide-y divide-border">
@@ -210,9 +253,10 @@ function SearchPage() {
         )}
       </section>
 
+      {!user && <div className="h-16 md:hidden" aria-hidden="true" />}
       {!user && (
         <div
-          className="fixed inset-x-0 z-50 px-4 md:hidden"
+          className="fixed inset-x-0 z-30 px-4 md:hidden"
           style={{ bottom: "calc(var(--app-nav-h, 4.5rem) + env(safe-area-inset-bottom, 0px))" }}
         >
           <a

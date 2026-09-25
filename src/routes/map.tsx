@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { MapPin, Navigation, Users } from "lucide-react";
@@ -13,6 +13,13 @@ import { mapsButtonLabel, openNativeMaps } from "@/lib/maps";
 import { useOrigin } from "@/lib/origin";
 import { listGyms } from "@/lib/server/queries";
 import { cn, formatMiles } from "@/lib/utils";
+import { useDebouncedCallback } from "@/lib/use-debounced-callback";
+import { useNearbyGymsRefresh } from "@/lib/use-nearby-gyms-refresh";
+
+/** The map and list show at most this many gyms (nearest first). */
+const MAP_LIMIT = 150;
+/** Sidebar rows rendered up front; more on demand. */
+const LIST_PAGE = 30;
 
 type MapSearch = { gymType?: string; maxMiles?: number; q?: string };
 
@@ -43,9 +50,28 @@ function MapPage() {
   const maxMiles = range === 0 ? undefined : (range ?? (origin.hasPlace ? 25 : undefined));
   const anyDistance = range === 0 || (!origin.hasPlace && range == null);
 
+  const radius = origin.hasPlace && !anyDistance ? (maxMiles ?? 25) : undefined;
+  const { importing } = useNearbyGymsRefresh(origin, radius ?? 25);
+  const [text, setText] = useState(search.q ?? "");
+  const committed = useRef(search.q ?? "");
+  useEffect(() => {
+    const q = search.q ?? "";
+    if (q !== committed.current) {
+      committed.current = q;
+      setText(q);
+    }
+  }, [search.q]);
+  const commitText = useDebouncedCallback((value: string) => {
+    committed.current = value.trim();
+    patch({ q: value.trim() || undefined }, true);
+  }, 300);
+  const [shown, setShown] = useState(LIST_PAGE);
+
   const query = useQuery({
-    queryKey: ["gyms-map", search.gymType, search.q, origin.lat, origin.lng, origin.hasPlace, range],
+    queryKey: ["gyms-map", search.gymType, search.q, origin.lat, origin.lng, origin.hasPlace, radius],
     enabled: origin.hydrated,
+    // Keep showing the current gyms while a new filter/city loads.
+    placeholderData: (prev) => prev,
     queryFn: () =>
       listGyms({
         data: {
@@ -54,18 +80,21 @@ function MapPage() {
           lng: origin.lng,
           q: search.q,
           hasPlace: origin.hasPlace,
-          maxMiles: origin.hasPlace && !anyDistance ? (maxMiles ?? 25) : undefined,
+          maxMiles: radius,
+          limit: MAP_LIMIT,
         },
       }),
   });
 
-  const gyms = query.data ?? [];
+  const gyms = useMemo(() => query.data ?? [], [query.data]);
+  useEffect(() => setShown(LIST_PAGE), [query.data]);
+  const loadingFirst = !origin.hydrated || (query.isPending && gyms.length === 0);
   const fallback =
     Boolean(origin.hasPlace && maxMiles != null && gyms.length > 0 && gyms.every((g) => g.miles > maxMiles + 0.25));
   const active = useMemo(() => gyms.find((g) => g.id === activeId) ?? gyms[0], [gyms, activeId]);
 
-  function patch(next: Partial<MapSearch>) {
-    void navigate({ search: (prev) => ({ ...prev, ...next }) });
+  function patch(next: Partial<MapSearch>, replace = false) {
+    void navigate({ replace, search: (prev) => ({ ...prev, ...next }) });
   }
 
   return (
@@ -107,13 +136,16 @@ function MapPage() {
         </div>
       </div>
       <Input
-        value={search.q ?? ""}
-        onChange={(e) => patch({ q: e.target.value || undefined })}
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value);
+          commitText(e.target.value);
+        }}
         placeholder="Gym name"
         className="h-9 max-w-xs rounded-full"
       />
 
-      <div className="flex gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div className="chip-row">
         <Chip active={!search.gymType} onClick={() => patch({ gymType: undefined })}>
           All gyms
         </Chip>
@@ -128,7 +160,7 @@ function MapPage() {
         ))}
       </div>
 
-      <div className="flex gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div className="chip-row">
         <Chip active={range === 0 || (!origin.hasPlace && range == null)} onClick={() => patch({ maxMiles: 0 })}>
           Any distance
         </Chip>
@@ -159,14 +191,14 @@ function MapPage() {
           ) : (
             <Skeleton className="size-full rounded-none" />
           )}
-          {query.isLoading && (
-            <div className="absolute right-3 top-3 rounded-full bg-bg/80 px-3 py-1 text-xs text-muted">
-              Loading gyms…
+          {(query.isFetching || importing) && (
+            <div className="pointer-events-none absolute right-3 top-3 z-[500] rounded-full bg-bg/80 px-3 py-1 text-xs text-muted">
+              {importing ? "Finding more gyms…" : "Loading gyms…"}
             </div>
           )}
         </div>
-        <aside className="max-h-[40vh] overflow-y-auto border-t border-border md:max-h-none md:w-[340px] md:border-l md:border-t-0">
-          {query.isLoading ? (
+        <aside className="max-h-[40vh] overflow-y-auto border-t border-border md:max-h-[640px] md:w-[340px] md:border-l md:border-t-0">
+          {loadingFirst ? (
             <div className="space-y-2 p-3">
               {Array.from({ length: 4 }).map((_, i) => (
                 <Skeleton key={i} className="h-20 rounded-lg" />
@@ -181,9 +213,11 @@ function MapPage() {
           ) : (
             <>
               <p className="px-3 pt-3 text-xs uppercase tracking-wide text-muted">
-                {gyms.length} gyms{maxMiles ? ` within ${maxMiles} mi` : ""}
+                {gyms.length >= MAP_LIMIT
+                  ? `Closest ${gyms.length} gyms${maxMiles && !fallback ? ` within ${maxMiles} mi` : ""}`
+                  : `${gyms.length} gyms${maxMiles && !fallback ? ` within ${maxMiles} mi` : ""}`}
               </p>
-              {gyms.map((g) => (
+              {gyms.slice(0, shown).map((g) => (
               <button
                 key={g.id}
                 type="button"
@@ -219,6 +253,15 @@ function MapPage() {
                 </div>
               </button>
               ))}
+              {gyms.length > shown && (
+                <button
+                  type="button"
+                  onClick={() => setShown((n) => n + LIST_PAGE)}
+                  className="w-full p-3 text-center text-sm text-primary"
+                >
+                  Show more ({gyms.length - shown} left)
+                </button>
+              )}
             </>
           )}
           {active && (
