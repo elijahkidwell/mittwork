@@ -119,7 +119,7 @@ function MapPage() {
           placeholder="Search any city in the world"
         />
         <div className="flex flex-wrap items-center gap-2">
-          <Chip onClick={() => origin.locate()}>
+          <Chip className="inline-flex items-center gap-1.5" onClick={() => origin.locate()}>
             <Navigation className="size-3.5" />
             {origin.locating ? "Locating…" : "My location"}
           </Chip>

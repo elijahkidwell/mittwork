@@ -107,6 +107,27 @@ body,
   padding-bottom: calc(4.5rem + env(safe-area-inset-bottom, 0px) + 1rem);
 }
 
+/* Page content must never be wider than the viewport; wide rows scroll inside themselves. */
+.app-main > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* A single line of filter chips that scrolls sideways inside its own box on narrow screens. */
+.chip-row {
+  display: flex;
+  gap: 0.5rem;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.chip-row::-webkit-scrollbar {
+  display: none;
+}
+
 @media (min-width: 768px) {
   .app-shell {
     display: block;
