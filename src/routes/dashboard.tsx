@@ -1,5 +1,6 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { NeedSignIn } from "@/components/auth/need-sign-in";
@@ -64,7 +65,12 @@ function Dash() {
         <Button
           size="sm"
           variant="outline"
-          onClick={() => void navigator.clipboard.writeText(`${window.location.origin}/trainers/${trainer.id}`)}
+          onClick={() =>
+            void navigator.clipboard.writeText(`${window.location.origin}/trainers/${trainer.id}`).then(
+              () => toast.success("Link copied"),
+              () => toast.error("Couldn’t copy the link."),
+            )
+          }
         >
           Copy share link
         </Button>

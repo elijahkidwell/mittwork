@@ -38,7 +38,6 @@ export function Checkout({
   const [place, setPlace] = useState<SessionPlaceId>(offered[0] ?? "trainer_gym");
   const [where, setWhere] = useState("");
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState<string | null>(null);
 
   if (!service || !startAt) return null;
 
@@ -77,12 +76,9 @@ export function Checkout({
           locationNote: where.trim() || undefined,
         },
       });
-      if (res.mode === "stripe" && res.url) {
-        openExternal(res.url);
-        return;
-      }
-      setDone(res.bookingId);
-      toast.success("Session booked.");
+      // Every booking goes through Stripe Checkout; never confirm a session without payment.
+      if (!res.url) throw new Error("Stripe didn’t open a payment page, so nothing was booked. Try again.");
+      openExternal(res.url);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not complete booking.");
     } finally {
@@ -93,87 +89,70 @@ export function Checkout({
   return (
     <Modal
       open={open}
-      onClose={() => {
-        if (done) navigate({ to: "/bookings" });
-        else onClose();
-      }}
-      title={done ? "You're booked" : "Confirm & pay"}
+      onClose={onClose}
+      title="Confirm & pay"
     >
-      {done ? (
-        <div className="space-y-4">
-          <p className="text-sm text-muted">
-            {service.name} with {trainerName} on {formatWhen(startAt)}. A reminder is waiting in your bookings.
+      <div className="space-y-4">
+        <div className="rounded-lg bg-elevated p-3.5 text-sm">
+          <p className="font-medium">{service.name}</p>
+          <p className="text-muted">
+            {trainerName} · {mins} min
           </p>
-          <p className="text-sm text-subtle">
-            Paid {formatMoney(total)} for {mins} min · trainer gets {formatMoney(amount - fee)}.
-          </p>
-          <Button className="w-full" onClick={() => navigate({ to: "/bookings" })}>
-            View bookings
-          </Button>
+          <p className="mt-1 text-muted">{formatWhen(startAt)}</p>
+          <div className="mt-3 space-y-1 border-t border-border pt-3 tabular-nums">
+            <Row label="Session" value={formatMoney(amount)} />
+            <Row label="Card processing" value={formatMoney(cardFee)} />
+            <Row label="You pay" value={formatMoney(total)} />
+            <Row label="Trainer receives" value={formatMoney(amount - fee)} muted />
+            <Row label="Mittwork keeps (8%)" value={formatMoney(fee)} muted />
+          </div>
         </div>
-      ) : (
-        <div className="space-y-4">
-          <div className="rounded-lg bg-elevated p-3.5 text-sm">
-            <p className="font-medium">{service.name}</p>
-            <p className="text-muted">
-              {trainerName} · {mins} min
-            </p>
-            <p className="mt-1 text-muted">{formatWhen(startAt)}</p>
-            <div className="mt-3 space-y-1 border-t border-border pt-3 tabular-nums">
-              <Row label="Session" value={formatMoney(amount)} />
-              <Row label="Card processing" value={formatMoney(cardFee)} />
-              <Row label="You pay" value={formatMoney(total)} />
-              <Row label="Trainer receives" value={formatMoney(amount - fee)} muted />
-              <Row label="Mittwork keeps (8%)" value={formatMoney(fee)} muted />
-            </div>
+        <div>
+          <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted">Where</p>
+          <div className="flex flex-col gap-1.5">
+            {SESSION_PLACES.filter((p) => offered.includes(p.id)).map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => setPlace(p.id)}
+                className={
+                  place === p.id
+                    ? "rounded-lg bg-primary px-3 py-2 text-left text-sm text-white"
+                    : "rounded-lg bg-elevated px-3 py-2 text-left text-sm"
+                }
+              >
+                {p.label}
+              </button>
+            ))}
           </div>
-          <div>
-            <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-muted">Where</p>
-            <div className="flex flex-col gap-1.5">
-              {SESSION_PLACES.filter((p) => offered.includes(p.id)).map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => setPlace(p.id)}
-                  className={
-                    place === p.id
-                      ? "rounded-lg bg-primary px-3 py-2 text-left text-sm text-white"
-                      : "rounded-lg bg-elevated px-3 py-2 text-left text-sm"
-                  }
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          {needWhere && (
-            <div>
-              <Label htmlFor="where">{place === "park" ? "Which park" : "Address or gym name"}</Label>
-              <Input
-                id="where"
-                value={where}
-                onChange={(e) => setWhere(e.target.value)}
-                placeholder={place === "client_gym" ? "Gym name and city" : "Street, city, or pin drop"}
-              />
-            </div>
-          )}
-          <div>
-            <Label htmlFor="nm">Name on the session</Label>
-            <Input id="nm" value={name} onChange={(e) => setName(e.target.value)} />
-          </div>
-          <div>
-            <Label htmlFor="nt">Note for your trainer</Label>
-            <Input id="nt" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Injuries, goals, gloves…" />
-          </div>
-          <p className="text-xs text-subtle">
-            Card processing is added on top so the trainer still gets 92% and Mittwork still keeps 8%. Cancel free until
-            24 hours before. After that — including no-shows — the trainer is paid in full.
-          </p>
-          <Button className="w-full" disabled={busy} onClick={() => void pay()}>
-            {busy ? "Redirecting…" : `Pay ${formatMoney(total)}`}
-          </Button>
         </div>
-      )}
+        {needWhere && (
+          <div>
+            <Label htmlFor="where">{place === "park" ? "Which park" : "Address or gym name"}</Label>
+            <Input
+              id="where"
+              value={where}
+              onChange={(e) => setWhere(e.target.value)}
+              placeholder={place === "client_gym" ? "Gym name and city" : "Street, city, or pin drop"}
+            />
+          </div>
+        )}
+        <div>
+          <Label htmlFor="nm">Name on the session</Label>
+          <Input id="nm" value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
+        <div>
+          <Label htmlFor="nt">Note for your trainer</Label>
+          <Input id="nt" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Injuries, goals, gloves…" />
+        </div>
+        <p className="text-xs text-subtle">
+          Card processing is added on top so the trainer still gets 92% and Mittwork still keeps 8%. Cancel free until
+          24 hours before. After that — including no-shows — the trainer is paid in full.
+        </p>
+        <Button className="w-full" disabled={busy} onClick={() => void pay()}>
+          {busy ? "Redirecting…" : `Pay ${formatMoney(total)}`}
+        </Button>
+      </div>
     </Modal>
   );
 }

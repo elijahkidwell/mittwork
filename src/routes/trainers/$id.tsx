@@ -12,7 +12,8 @@ import { styleLabel } from "@/lib/catalog";
 import { placeLabel } from "@/lib/locations";
 import { isVideoUrl, type MediaItem } from "@/lib/media";
 import { getTrainer, listSlots, type ServiceRow } from "@/lib/server/queries";
-import { cn, formatPrice, formatWhen, laParts, laWallDate, pad2, priceForDuration, SESSION_LENGTHS } from "@/lib/utils";
+import { toast } from "sonner";
+import { cn, formatPrice, laDayIso, laParts, laWallDate, priceForDuration, SESSION_LENGTHS } from "@/lib/utils";
 
 export const Route = createFileRoute("/trainers/$id")({
   component: TrainerPage,
@@ -27,7 +28,7 @@ function TrainerPage() {
   const t = trainer.data;
 
   const [serviceId, setServiceId] = useState<string | null>(null);
-  const [date, setDate] = useState(() => dayIso(0));
+  const [date, setDate] = useState(() => laDayIso(0));
   const [slot, setSlot] = useState<string | null>(null);
   const [pay, setPay] = useState(false);
   const [hero, setHero] = useState<MediaItem | null>(null);
@@ -73,25 +74,27 @@ function TrainerPage() {
   const photo = hero ?? media[0] ?? { url: t.photoUrl, kind: "photo" as const };
   const trainerName = t.name;
   const days = Array.from({ length: 14 }, (_, i) => {
-    const iso = dayIso(i);
+    const iso = laDayIso(i);
     const p = laParts(laWallDate(...isoToParts(iso), 12, 0));
     return { iso, dow: p.weekday, day: p.day };
   });
 
   async function share() {
     const url = window.location.href;
-    if (navigator.share) {
+    if (typeof navigator.share === "function") {
       try {
         await navigator.share({ title: `${trainerName} on Mittwork`, url });
         return;
-      } catch {
-        /* fall through */
+      } catch (err) {
+        // The person closed the share sheet; nothing to report.
+        if (err instanceof DOMException && err.name === "AbortError") return;
       }
     }
     try {
       await navigator.clipboard.writeText(url);
+      toast.success("Link copied");
     } catch {
-      /* ignore */
+      toast.error("Couldn’t copy the link. Copy it from the address bar.");
     }
   }
 
@@ -159,6 +162,12 @@ function TrainerPage() {
             )}
           </div>
           <p className="text-muted">{t.headline}</p>
+          {!t.acceptsPayments && (
+            <p className="rounded-lg bg-elevated px-3 py-2 text-sm text-muted">
+              Bookings aren’t open for this coach yet. They still need to connect payments, so no sessions can be booked
+              right now.
+            </p>
+          )}
           <p className="flex items-center gap-1.5 text-sm text-subtle">
             <MapPin className="size-4" />
             {t.gymName} · {t.city}
@@ -199,7 +208,7 @@ function TrainerPage() {
         </section>
       </div>
 
-      <aside id="book" className="space-y-4 lg:sticky lg:top-20 lg:self-start">
+      <aside id="book" className="scroll-mt-20 space-y-4 lg:sticky lg:top-20 lg:self-start">
         <div className="rounded-xl bg-surface p-4 shadow-[var(--shadow-border)]">
           <h2 className="font-display text-2xl tracking-wide">Book a session</h2>
           <div className="mt-3 space-y-2">
@@ -276,7 +285,7 @@ function TrainerPage() {
           )}
 
           <p className="mt-4 text-xs font-medium uppercase tracking-wide text-muted">Date</p>
-          <div className="mt-2 flex w-full min-w-0 gap-1.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="mt-2 grid w-full min-w-0 grid-cols-7 gap-1.5">
             {days.map((d) => (
               <button
                 key={d.iso}
@@ -286,7 +295,7 @@ function TrainerPage() {
                   setSlot(null);
                 }}
                 className={cn(
-                  "flex h-14 w-12 shrink-0 flex-col items-center justify-center rounded-md text-xs",
+                  "flex h-14 min-w-0 flex-col items-center justify-center rounded-md text-xs",
                   date === d.iso ? "bg-primary text-primary-fg" : "bg-elevated text-muted",
                 )}
               >
@@ -296,7 +305,9 @@ function TrainerPage() {
             ))}
           </div>
 
-          <p className="mt-4 text-xs font-medium uppercase tracking-wide text-muted">Time</p>
+          <p className="mt-4 text-xs font-medium uppercase tracking-wide text-muted">
+            Time <span className="normal-case tracking-normal text-subtle">· shown in Pacific Time (PT)</span>
+          </p>
           <div className="mt-2 flex flex-wrap gap-1.5">
             {slots.isLoading ? (
               <p className="text-sm text-subtle">Loading times…</p>
@@ -335,17 +346,19 @@ function TrainerPage() {
       </aside>
       </div>
 
-      <div
-        className="fixed inset-x-0 z-40 px-4 lg:hidden"
-        style={{ bottom: "calc(var(--app-nav-h, 4.5rem) + env(safe-area-inset-bottom, 0px))" }}
-      >
-        <a
-          href="#book"
-          className="flex h-12 items-center justify-center rounded-full bg-cta text-sm font-semibold tracking-[0.14em] text-cta-fg"
+      {t.acceptsPayments && (
+        <div
+          className="fixed inset-x-0 z-40 px-4 lg:hidden"
+          style={{ bottom: "calc(var(--app-nav-h, 4.5rem) + env(safe-area-inset-bottom, 0px))" }}
         >
-          BOOK · {formatPrice(t.priceFrom)}
-        </a>
-      </div>
+          <a
+            href="#book"
+            className="flex h-12 items-center justify-center rounded-full bg-cta text-sm font-semibold tracking-[0.14em] text-cta-fg"
+          >
+            BOOK · {formatPrice(t.priceFrom)}
+          </a>
+        </div>
+      )}
 
       <Checkout
         open={pay}
@@ -359,14 +372,6 @@ function TrainerPage() {
       />
     </div>
   );
-}
-
-function dayIso(offset: number): string {
-  const p = laParts();
-  const noon = laWallDate(p.year, p.month, p.day, 12, 0);
-  const d = new Date(noon.getTime() + offset * 86400000);
-  const x = laParts(d);
-  return `${x.year}-${pad2(x.month)}-${pad2(x.day)}`;
 }
 
 function isoToParts(iso: string): [number, number, number] {
