@@ -54,84 +54,19 @@ export function minutesToLabel(min: number): string {
   return `${h}:${pad2(m)} ${ampm}`;
 }
 
-/** Construct a Date for a wall-clock time in America/Los_Angeles (PDT in season). */
-export function laWallDate(
-  year: number,
-  month: number,
-  day: number,
-  hour: number,
-  minute: number,
-): Date {
-  // Sept 2026 is PDT (UTC-7). Booking windows are the next two weeks.
-  return new Date(
-    `${year}-${pad2(month)}-${pad2(day)}T${pad2(hour)}:${pad2(minute)}:00-07:00`,
-  );
-}
-
-export function laParts(date = new Date()) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Los_Angeles",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    weekday: "short",
-    hourCycle: "h23",
-  }).formatToParts(date);
-  const get = (type: string) =>
-    parts.find((p) => p.type === type)?.value ?? "0";
-  return {
-    year: Number(get("year")),
-    month: Number(get("month")),
-    day: Number(get("day")),
-    hour: Number(get("hour")),
-    minute: Number(get("minute")),
-    weekday: get("weekday"),
-  };
-}
-
-const WEEKDAY_INDEX: Record<string, number> = {
-  Sun: 0,
-  Mon: 1,
-  Tue: 2,
-  Wed: 3,
-  Thu: 4,
-  Fri: 5,
-  Sat: 6,
-};
-
-export function laWeekday(date = new Date()): number {
-  return WEEKDAY_INDEX[laParts(date).weekday] ?? 0;
-}
-
-export function laMinutesNow(date = new Date()): number {
-  const p = laParts(date);
-  return p.hour * 60 + p.minute;
-}
-
-export function formatWhen(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Los_Angeles",
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(d);
-}
-
-export function formatDateShort(iso: string): string {
-  const d = new Date(iso);
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Los_Angeles",
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  }).format(d);
-}
+export {
+  LA_TZ,
+  formatDateShort,
+  formatWhen,
+  formatDayLA,
+  formatTimeLA,
+  laDayIso,
+  laDayKey,
+  laMinutesNow,
+  laParts,
+  laWallDate,
+  laWeekday,
+} from "./la-time.ts";
 
 export function initials(name: string): string {
   return name
@@ -171,4 +106,3 @@ export function priceForDuration(baseCents: number, baseMin: number, durationMin
   return Math.max(500, Math.round((baseCents * dur) / listed));
 }
 
-export const LA_TZ = "America/Los_Angeles";
