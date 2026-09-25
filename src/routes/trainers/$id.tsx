@@ -108,21 +108,25 @@ function TrainerPage() {
               className="h-56 w-full object-cover object-top sm:h-72"
             />
           ) : (
-            <img src={photo.url} alt={t.name} className="h-56 w-full object-cover object-top sm:h-72" />
+            <img src={photo.url} alt={t.name} width={720} height={480} decoding="async" className="h-56 w-full object-cover object-top sm:h-72" />
           )}
         </div>
         {media.length > 1 && (
           <div className="flex gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {media.map((item) => (
-              <button key={item.url.slice(0, 40)} type="button" onClick={() => setHero(item)} className="relative shrink-0">
+            {media.map((item, i) => (
+              <button key={`${i}-${item.url}`} type="button" onClick={() => setHero(item)} className="relative shrink-0">
                 {item.kind === "video" ? (
                   <img
                     src={item.poster || t.photoUrl}
                     alt=""
+                    width={112}
+                    height={80}
+                    loading="lazy"
+                    decoding="async"
                     className="h-20 w-28 rounded-md object-cover object-top"
                   />
                 ) : (
-                  <img src={item.url} alt="" className="h-20 w-28 rounded-md object-cover object-top" />
+                  <img src={item.url} alt="" width={112} height={80} loading="lazy" decoding="async" className="h-20 w-28 rounded-md object-cover object-top" />
                 )}
                 {item.kind === "video" && (
                   <span className="absolute bottom-1 left-1 rounded bg-black/70 px-1 text-[10px] text-white">Video</span>

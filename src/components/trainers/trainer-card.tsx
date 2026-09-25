@@ -29,6 +29,10 @@ export function TrainerCard({
         <img
           src={trainer.photoUrl}
           alt={trainer.name}
+          width={480}
+          height={600}
+          loading="lazy"
+          decoding="async"
           className="size-full object-cover object-top transition-transform duration-300 ease-out group-hover:scale-[1.03]"
         />
         <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-bg/90 to-transparent" />

@@ -1,16 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { readFile } from "node:fs/promises";
 import { tileXY } from "@/lib/place-photo";
 
-async function fallbackThumb() {
-  try {
-    const bytes = await readFile("public/photos/gyms/gym-dark.jpg");
-    return new Response(bytes, {
-      headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=3600" },
-    });
-  } catch {
-    return new Response(null, { status: 404 });
-  }
+/** Static files aren't on the serverless filesystem, so send the browser to the CDN copy. */
+function fallbackThumb() {
+  return new Response(null, {
+    status: 302,
+    headers: { Location: "/photos/gyms/gym-dark.webp", "Cache-Control": "public, max-age=3600" },
+  });
 }
 
 export const Route = createFileRoute("/api/place-thumb")({
@@ -33,7 +29,7 @@ export const Route = createFileRoute("/api/place-thumb")({
           return new Response(bytes, {
             headers: {
               "Content-Type": res.headers.get("content-type") || "image/jpeg",
-              "Cache-Control": "public, max-age=86400",
+              "Cache-Control": "public, max-age=86400, s-maxage=604800",
             },
           });
         } catch {

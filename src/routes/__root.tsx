@@ -20,9 +20,6 @@ export const Route = createRootRoute({
       { name: "theme-color", content: "#09090b" },
     ],
     links: [
-      { rel: "preload", href: "/logo-lockup.png", as: "image" },
-      { rel: "preload", href: "/videos/chrome-mittwork.jpg", as: "image" },
-      { rel: "preload", href: "/videos/chrome-spin.webp", as: "image" },
       { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       { rel: "preconnect", href: "https://fonts.gstatic.com" },

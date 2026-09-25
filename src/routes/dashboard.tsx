@@ -40,7 +40,7 @@ function Dash() {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
-        <img src={trainer.photo_url} alt="" className="size-14 rounded-full object-cover" />
+        <img src={trainer.photo_url} alt="" width={56} height={56} decoding="async" className="size-14 rounded-full object-cover" />
         <div>
           <h1 className="font-display text-3xl tracking-wide">{trainer.name}</h1>
           <p className="text-sm text-muted">{upcoming} upcoming · {formatMoney(earnedCents)} earned after fees</p>

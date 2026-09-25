@@ -40,17 +40,17 @@ export const DISTANCE_OPTIONS = [5, 10, 25, 50, 100] as const;
 
 
 export const STYLE_PHOTOS: Record<string, string> = {
-  boxing: "/photos/gyms/boxing-ring.jpg",
-  mma: "/photos/gyms/mma-cage.jpg",
-  "muay-thai": "/photos/styles/muay-thai.jpg",
-  karate: "/photos/gyms/martial-arts.jpg",
-  bjj: "/photos/styles/bjj.jpg",
-  wrestling: "/photos/gyms/wrestling.jpg",
-  grappling: "/photos/styles/grappling.jpg",
-  bodybuilding: "/photos/styles/bodybuilding-lift.jpg",
-  strength: "/photos/styles/strength.jpg",
-  yoga: "/photos/styles/yoga.jpg",
-  fitness: "/photos/styles/fitness.jpg",
+  boxing: "/photos/gyms/boxing-ring.webp",
+  mma: "/photos/gyms/mma-cage.webp",
+  "muay-thai": "/photos/styles/muay-thai.webp",
+  karate: "/photos/gyms/martial-arts.webp",
+  bjj: "/photos/styles/bjj.webp",
+  wrestling: "/photos/gyms/wrestling.webp",
+  grappling: "/photos/styles/grappling.webp",
+  bodybuilding: "/photos/styles/bodybuilding-lift.webp",
+  strength: "/photos/styles/strength.webp",
+  yoga: "/photos/styles/yoga.webp",
+  fitness: "/photos/styles/fitness.webp",
 };
 
 export function styleLabel(id: string): string {

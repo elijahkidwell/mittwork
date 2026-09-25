@@ -507,7 +507,7 @@ function TrainerSessionCard({ session: s }: { session: TrainerSession }) {
     <li className="rounded-xl bg-surface p-3.5 shadow-[var(--shadow-border)]">
       <div className="flex gap-3">
         {s.clientPhoto ? (
-          <img src={s.clientPhoto} alt="" className="size-12 rounded-full object-cover" />
+          <img src={s.clientPhoto} alt="" width={48} height={48} loading="lazy" decoding="async" className="size-12 rounded-full object-cover" />
         ) : (
           <div className="grid size-12 place-items-center rounded-full bg-elevated text-sm font-medium">
             {(s.clientName || "C").slice(0, 1).toUpperCase()}
@@ -600,7 +600,7 @@ function List({
           {rows.map((b) => (
             <li key={b.id} className="flex gap-3 rounded-xl bg-surface p-3 shadow-[var(--shadow-border)]">
               {b.trainerPhoto ? (
-                <img src={b.trainerPhoto} alt="" className="size-16 rounded-md object-cover" />
+                <img src={b.trainerPhoto} alt="" width={64} height={64} loading="lazy" decoding="async" className="size-16 rounded-md object-cover" />
               ) : (
                 <div className="grid size-16 place-items-center rounded-md bg-elevated text-sm font-medium">
                   {(b.trainerName || "T").slice(0, 1).toUpperCase()}

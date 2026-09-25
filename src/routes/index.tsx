@@ -6,7 +6,16 @@ import { LandingSpin } from "@/components/landing-spin";
 import { SignInPanel } from "@/components/auth/sign-in-panel";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 
-export const Route = createFileRoute("/")({ component: Landing });
+export const Route = createFileRoute("/")({
+  // Only the landing page shows the chrome spin, so only it preloads those frames.
+  head: () => ({
+    links: [
+      { rel: "preload", href: "/videos/chrome-mittwork.jpg", as: "image" },
+      { rel: "preload", href: "/videos/chrome-spin.webp", as: "image" },
+    ],
+  }),
+  component: Landing,
+});
 
 function Landing() {
   const { user } = useCurrentUserState();

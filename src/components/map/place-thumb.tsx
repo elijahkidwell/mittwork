@@ -23,6 +23,10 @@ export function PlaceThumb({
     <img
       src={url}
       alt=""
+      width={256}
+      height={256}
+      loading="lazy"
+      decoding="async"
       className={cn("bg-elevated object-cover", className)}
       onError={() => {
         if (url !== fallback) setUrl(fallback);

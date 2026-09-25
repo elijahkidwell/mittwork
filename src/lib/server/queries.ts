@@ -408,6 +408,8 @@ function photoVersion(u: string) {
 
 function publicPhoto(url: string | null | undefined, kind: "t" | "g", id: string, slot: string): string {
   const u = url || "";
+  // Older rows point at the original stock JPEGs; every one now has a smaller WebP twin.
+  if (/^\/photos\/(gyms|styles|trainers)\/[a-z0-9-]+\.jpg$/.test(u)) return u.slice(0, -4) + ".webp";
   if (!u.startsWith("data:image/")) return u;
   return `/api/photo/${kind}/${encodeURIComponent(id)}/${slot}?v=${photoVersion(u)}`;
 }
@@ -1765,7 +1767,7 @@ export const becomeTrainer = createServerFn({ method: "POST" })
     });
     const existing = await sql<{ id: string }>`select id from trainers where user_id = ${context.userId}`;
     const id = existing[0]?.id ?? `tr_${crypto.randomUUID().slice(0, 8)}`;
-    const photo = data.photoUrl || "/photos/gyms/training.jpg";
+    const photo = data.photoUrl || "/photos/gyms/training.webp";
     const places = JSON.stringify(parsePlaces(data.locationOptions));
     const offerings = (data.services ?? [])
       .map((s) => ({

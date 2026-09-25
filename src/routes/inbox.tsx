@@ -55,7 +55,7 @@ function InboxList() {
                 className="flex min-h-16 items-center gap-3 py-3 active:bg-elevated"
               >
                 {t.otherPhoto ? (
-                  <img src={t.otherPhoto} alt="" className="size-12 rounded-full object-cover object-top" />
+                  <img src={t.otherPhoto} alt="" width={48} height={48} loading="lazy" decoding="async" className="size-12 rounded-full object-cover object-top" />
                 ) : (
                   <div className="grid size-12 place-items-center rounded-full bg-elevated text-sm font-medium">
                     {(t.otherName || "?").slice(0, 1).toUpperCase()}

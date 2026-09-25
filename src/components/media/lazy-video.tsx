@@ -24,7 +24,7 @@ export function LazyVideo({
         aria-label="Play video"
       >
         {poster ? (
-          <img src={poster} alt="" className="size-full object-cover" />
+          <img src={poster} alt="" loading="lazy" decoding="async" className="size-full object-cover" />
         ) : (
           <span className="block size-full bg-elevated" />
         )}

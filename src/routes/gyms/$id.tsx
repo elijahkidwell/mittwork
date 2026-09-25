@@ -75,13 +75,13 @@ function GymPage() {
   return (
     <div className="w-full max-w-full space-y-6 overflow-x-hidden">
       <div className="overflow-hidden rounded-xl bg-elevated">
-        <img src={cover} alt="" className="h-56 w-full object-cover sm:h-72" />
+        <img src={cover} alt="" width={720} height={480} decoding="async" className="h-56 w-full object-cover sm:h-72" />
       </div>
       {shots.length > 1 && (
         <div className="flex gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {shots.map((src) => (
-            <button key={src.slice(0, 48)} type="button" onClick={() => setHero(src)} className="shrink-0">
-              <img src={src} alt="" className="h-16 w-24 rounded-md object-cover" />
+          {shots.map((src, i) => (
+            <button key={`${i}-${src}`} type="button" onClick={() => setHero(src)} className="shrink-0">
+              <img src={src} alt="" width={96} height={64} loading="lazy" decoding="async" className="h-16 w-24 rounded-md object-cover" />
             </button>
           ))}
         </div>
