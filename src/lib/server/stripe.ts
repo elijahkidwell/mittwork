@@ -2,24 +2,20 @@ import Stripe from "stripe";
 import { env } from "@/lib/env.server";
 import { PLATFORM_FEE } from "@/lib/utils";
 
+/**
+ * Keys come from env (STRIPE_SECRET_KEY etc.). Older deployments may also have
+ * keys saved in `platform_settings`; those are still read, but there is no
+ * longer any endpoint that writes them.
+ */
 type StoredKeys = { secret?: string; publishable?: string; ownerUserId?: string };
 
 let cached: { at: number; keys: StoredKeys } | null = null;
 
 async function storedKeys(): Promise<StoredKeys> {
-  if (cached && Date.now() - cached.at < 15_000) return cached.keys;
+  if (cached && Date.now() - cached.at < 300_000) return cached.keys;
   try {
     const { getSql } = await import("@/lib/db");
     const sql = await getSql();
-    await sql.query(`
-      create table if not exists platform_settings (
-        id text primary key,
-        stripe_secret_key text,
-        stripe_publishable_key text,
-        owner_user_id text,
-        updated_at timestamptz not null default now()
-      )
-    `);
     const rows = await sql.query<{
       stripe_secret_key: string | null;
       stripe_publishable_key: string | null;
@@ -36,10 +32,6 @@ async function storedKeys(): Promise<StoredKeys> {
   } catch {
     return {};
   }
-}
-
-export function clearStripeCache() {
-  cached = null;
 }
 
 export async function stripeSecret() {
@@ -67,15 +59,6 @@ export async function getStripe() {
   const key = await stripeSecret();
   if (!key) return null;
   return new Stripe(key);
-}
-
-export async function stripeOwnerUserId() {
-  return (await storedKeys()).ownerUserId;
-}
-
-export function maskKey(key: string) {
-  if (key.length < 10) return "••••";
-  return `${key.slice(0, 7)}…${key.slice(-4)}`;
 }
 
 export function splitAmount(amountCents: number) {
