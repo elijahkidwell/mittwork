@@ -1,64 +1,10 @@
 import { useRef, useState } from "react";
 import { Camera, Plus, Trash2, Video } from "lucide-react";
 import { toast } from "sonner";
-import { compressImage, shrinkVideo, type MediaItem } from "@/lib/media";
+import { shrinkVideo, type MediaItem } from "@/lib/media";
+import { uploadBlob, uploadPhotoFile, uploadPosterDataUrl } from "@/lib/media-upload";
 import { LazyVideo } from "@/components/media/lazy-video";
-import { finishMediaParts, putMediaPart } from "@/lib/server/queries";
 import { cn } from "@/lib/utils";
-
-export async function uploadPhotoFile(file: File): Promise<string> {
-  return compressImage(file, 720);
-}
-
-async function sliceToBase64(blob: Blob): Promise<string> {
-  const buf = new Uint8Array(await blob.arrayBuffer());
-  let binary = "";
-  const step = 0x8000;
-  for (let j = 0; j < buf.length; j += step) {
-    binary += String.fromCharCode(...buf.subarray(j, j + step));
-  }
-  return btoa(binary);
-}
-
-async function uploadBlob(blob: Blob, mime: string, onStatus?: (s: string) => void): Promise<string> {
-  if (blob.size < 32) throw new Error("That clip was empty.");
-  if (blob.size > 80 * 1024 * 1024) {
-    throw new Error("Clip is over 80 MB. Trim it in Photos and try again.");
-  }
-  const SIZE = 120_000;
-  const total = Math.max(1, Math.ceil(blob.size / SIZE));
-  const id = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-  let finished = 0;
-
-  async function sendPart(index: number, attempt = 0): Promise<void> {
-    const start = index * SIZE;
-    const end = Math.min(blob.size, start + SIZE);
-    const chunk = await sliceToBase64(blob.slice(start, end));
-    try {
-      await putMediaPart({ data: { id, index, total, chunk, mime } });
-    } catch (err) {
-      if (attempt < 2) {
-        await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
-        return sendPart(index, attempt + 1);
-      }
-      throw err;
-    }
-    finished += 1;
-    onStatus?.(`Saving ${Math.round((finished / total) * 100)}%`);
-  }
-
-  const concurrency = 2;
-  for (let i = 0; i < total; i += concurrency) {
-    const batch: Promise<void>[] = [];
-    for (let j = i; j < Math.min(total, i + concurrency); j += 1) batch.push(sendPart(j));
-    await Promise.all(batch);
-  }
-
-  onStatus?.("Finishing…");
-  const res = await finishMediaParts({ data: { id, total, mime } });
-  if (!res.url) throw new Error("Upload did not finish.");
-  return res.url;
-}
 
 export function PhotoPicker({
   value,
@@ -82,7 +28,7 @@ export function PhotoPicker({
     }
     setBusy(true);
     try {
-      onChange(await compressImage(file, 720));
+      onChange(await uploadPhotoFile(file));
       toast.success("Photo ready.");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not read that photo.");
@@ -146,7 +92,7 @@ export function GalleryEditor({
       for (let i = 0; i < files.length; i += 1) {
         if (next.length >= 24) break;
         setStatus(`Photo ${i + 1} of ${files.length}…`);
-        const url = await compressImage(files[i]!, 720);
+        const url = await uploadPhotoFile(files[i]!);
         next.push({ url, kind: "photo" });
       }
       onChange(next);
@@ -173,7 +119,8 @@ export function GalleryEditor({
         const prepared = await shrinkVideo(file, (s) => setStatus(`${s} (${label})`));
         setStatus(`Saving ${label}…`);
         const url = await uploadBlob(prepared.blob, prepared.mime, (s) => setStatus(`${s} (${label})`));
-        next.push({ url, kind: "video", poster: prepared.poster });
+        const poster = prepared.poster ? await uploadPosterDataUrl(prepared.poster) : undefined;
+        next.push({ url, kind: "video", poster });
       }
       onChange(next);
       toast.success(files.length > 1 ? "Videos added." : "Video added.");

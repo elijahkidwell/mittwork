@@ -1,7 +1,9 @@
 export type MediaItem = { url: string; kind: "photo" | "video"; poster?: string };
 
 export function isVideoUrl(url: string) {
-  return /^data:video\//.test(url) || /\.(mp4|webm|mov|m4v)(\?|$)/i.test(url) || /\/api\/media\//.test(url);
+  if (/^data:video\//.test(url) || /\.(mp4|webm|mov|m4v)(\?|$)/i.test(url)) return true;
+  // /api/media also stores uploaded photos now; only extension-less or video names are clips.
+  return /\/api\/media\//.test(url) && !/\.(jpe?g|png|webp)(\?|$)/i.test(url);
 }
 
 export function parseGallery(v: unknown): MediaItem[] {
@@ -40,8 +42,7 @@ export async function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-export async function compressImage(file: File, maxEdge = 720): Promise<string> {
-  const img = await loadImage(file);
+function drawScaled(img: HTMLImageElement, maxEdge: number): HTMLCanvasElement {
   const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
   const canvas = document.createElement("canvas");
   canvas.width = Math.max(1, Math.round(img.width * scale));
@@ -49,7 +50,19 @@ export async function compressImage(file: File, maxEdge = 720): Promise<string> 
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Could not read that photo.");
   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL("image/jpeg", 0.72);
+  return canvas;
+}
+
+/** Same resize as compressImage, but as a JPEG Blob for upload to /api/media. */
+export async function compressImageBlob(file: File, maxEdge = 720): Promise<Blob> {
+  const canvas = drawScaled(await loadImage(file), maxEdge);
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Could not read that photo."))), "image/jpeg", 0.72);
+  });
+}
+
+export async function compressImage(file: File, maxEdge = 720): Promise<string> {
+  return drawScaled(await loadImage(file), maxEdge).toDataURL("image/jpeg", 0.72);
 }
 
 function loadImage(file: File): Promise<HTMLImageElement> {
