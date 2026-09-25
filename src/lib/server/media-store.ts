@@ -1,8 +1,9 @@
-import { getSql, type Sql } from "@/lib/db";
+import { getSql } from "@/lib/db";
 
 function extOf(mime: string) {
   if (mime.includes("webm")) return "webm";
   if (mime.includes("png")) return "png";
+  if (mime.includes("webp")) return "webp";
   if (mime.includes("jpeg") || mime.includes("jpg")) return "jpg";
   if (mime.includes("quicktime")) return "mov";
   return "mp4";
@@ -17,22 +18,9 @@ export function mimeFromName(name: string) {
   if (name.endsWith(".mov")) return "video/quicktime";
   if (name.endsWith(".m4v")) return "video/x-m4v";
   if (name.endsWith(".png")) return "image/png";
+  if (name.endsWith(".webp")) return "image/webp";
   if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
   return "video/mp4";
-}
-
-export async function ensureMediaTables(sql: Sql) {
-  await sql.query(`
-    create table if not exists media_parts (
-      name text not null,
-      idx int not null,
-      user_id text not null,
-      mime text not null,
-      total int not null,
-      data bytea not null,
-      primary key (name, idx)
-    )
-  `);
 }
 
 function toBuffer(data: unknown): Buffer {
@@ -57,7 +45,6 @@ export async function savePart(input: {
   chunkBase64: string;
 }) {
   const sql = await getSql();
-  await ensureMediaTables(sql);
   const name = mediaFileName(input.userId, input.id, input.mime);
   const buf = Buffer.from(input.chunkBase64, "base64");
   if (buf.length > 250_000) throw new Error("Chunk too large.");
@@ -72,7 +59,6 @@ export async function savePart(input: {
 
 export async function partsComplete(userId: string, id: string, mime: string, total: number) {
   const sql = await getSql();
-  await ensureMediaTables(sql);
   const name = mediaFileName(userId, id, mime);
   const rows = await sql.query<{ n: number }>(
     `select count(*)::int as n from media_parts where name = $1 and user_id = $2`,
@@ -82,14 +68,43 @@ export async function partsComplete(userId: string, id: string, mime: string, to
   return `/api/media/${name}`;
 }
 
-export async function readMedia(name: string): Promise<{ mime: string; bytes: Buffer } | null> {
+type MediaMeta = { mime: string; size: number; parts: { idx: number; start: number; len: number }[] };
+
+/** Uploaded media never changes, so part layouts can be cached per instance. */
+const metaCache = new Map<string, MediaMeta>();
+
+/** Part sizes + total length, without loading the bytes. */
+export async function readMediaMeta(name: string): Promise<MediaMeta | null> {
+  const hit = metaCache.get(name);
+  if (hit) return hit;
   const sql = await getSql();
-  await ensureMediaTables(sql);
-  const rows = await sql.query<{ idx: number; mime: string; data: unknown }>(
-    `select idx, mime, data from media_parts where name = $1 order by idx`,
+  const rows = await sql.query<{ idx: number; mime: string; len: number }>(
+    `select idx, mime, octet_length(data)::int as len from media_parts where name = $1 order by idx`,
     [name],
   );
   if (!rows.length) return null;
-  const bytes = Buffer.concat(rows.map((r) => toBuffer(r.data)));
-  return { mime: rows[0]?.mime || mimeFromName(name), bytes };
+  let start = 0;
+  const parts = rows.map((r) => {
+    const part = { idx: Number(r.idx), start, len: Number(r.len) };
+    start += part.len;
+    return part;
+  });
+  const meta = { mime: rows[0]?.mime || mimeFromName(name), size: start, parts };
+  if (metaCache.size > 500) metaCache.clear();
+  metaCache.set(name, meta);
+  return meta;
+}
+
+/** Bytes [start, end] (inclusive), loading only the parts that cover them. */
+export async function readMediaRange(name: string, meta: MediaMeta, start: number, end: number): Promise<Buffer> {
+  const wanted = meta.parts.filter((p) => p.start <= end && p.start + p.len > start);
+  if (!wanted.length) return Buffer.alloc(0);
+  const sql = await getSql();
+  const rows = await sql.query<{ idx: number; data: unknown }>(
+    `select idx, data from media_parts where name = $1 and idx >= $2 and idx <= $3 order by idx`,
+    [name, wanted[0]!.idx, wanted[wanted.length - 1]!.idx],
+  );
+  const joined = Buffer.concat(rows.map((r) => toBuffer(r.data)));
+  const offset = wanted[0]!.start;
+  return joined.subarray(start - offset, end - offset + 1);
 }
