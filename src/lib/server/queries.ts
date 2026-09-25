@@ -14,15 +14,12 @@ import { safeAppOrigin } from "@/lib/app-origin";
 import { slotsForDay, validateBookingStart, type AvailabilityWindow } from "@/lib/booking-rules";
 import {
   DEFAULT_ORIGIN,
-  PLATFORM_FEE,
   clampDuration,
   formatWhen,
   laMinutesNow,
-  laParts,
   laWallDate,
   laWeekday,
   milesBetween,
-  pad2,
   priceForDuration,
   stripeGrossCharge,
 } from "@/lib/utils";

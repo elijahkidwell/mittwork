@@ -13,8 +13,9 @@ export function MittIcon({ className }: { className?: string }) {
 }
 
 export function Logo({
-  compact = false,
-  alwaysShow = false,
+  // Kept for callers; the current lockup renders the same at every size.
+  compact: _compact = false,
+  alwaysShow: _alwaysShow = false,
   stacked = false,
   className,
 }: {

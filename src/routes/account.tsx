@@ -4,7 +4,8 @@ import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-quer
 import { toast } from "sonner";
 import { NeedSignIn } from "@/components/auth/need-sign-in";
 import { GalleryEditor, PhotoPicker } from "@/components/media/uploader";
-import { emptyService, ServiceMenu, type MenuRow } from "@/components/trainers/service-menu";
+import { ServiceMenu } from "@/components/trainers/service-menu";
+import { emptyService, type MenuRow } from "@/components/trainers/service-menu-model";
 import { PlaceOptions } from "@/components/trainers/place-options";
 import { StripePayoutCard } from "@/components/trainers/stripe-payouts";
 import { CitySearch } from "@/components/location/city-search";
