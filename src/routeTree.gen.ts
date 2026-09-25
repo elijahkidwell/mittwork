@@ -20,13 +20,13 @@ import { Route as MapRouteImport } from './routes/map'
 import { Route as OnboardRouteImport } from './routes/onboard'
 import { Route as SearchRouteImport } from './routes/search'
 import { Route as ApiPlaceThumbRouteImport } from './routes/api/place-thumb'
-import { Route as ApiUploadRouteImport } from './routes/api/upload'
 import { Route as GymsIdRouteImport } from './routes/gyms/$id'
 import { Route as InboxBookingIdRouteImport } from './routes/inbox.$bookingId'
 import { Route as TrainersIdRouteImport } from './routes/trainers/$id'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiMediaNameRouteImport } from './routes/api/media.$name'
 import { Route as ApiStripeWebhookRouteImport } from './routes/api/stripe/webhook'
+import { Route as ApiPhotoKindIdSlotRouteImport } from './routes/api/photo.$kind.$id.$slot'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -83,11 +83,6 @@ const ApiPlaceThumbRoute = ApiPlaceThumbRouteImport.update({
   path: '/api/place-thumb',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiUploadRoute = ApiUploadRouteImport.update({
-  id: '/api/upload',
-  path: '/api/upload',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const GymsIdRoute = GymsIdRouteImport.update({
   id: '/gyms/$id',
   path: '/gyms/$id',
@@ -118,6 +113,11 @@ const ApiStripeWebhookRoute = ApiStripeWebhookRouteImport.update({
   path: '/api/stripe/webhook',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPhotoKindIdSlotRoute = ApiPhotoKindIdSlotRouteImport.update({
+  id: '/api/photo/$kind/$id/$slot',
+  path: '/api/photo/$kind/$id/$slot',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -131,13 +131,13 @@ export interface FileRoutesByFullPath {
   '/onboard': typeof OnboardRoute
   '/search': typeof SearchRoute
   '/api/place-thumb': typeof ApiPlaceThumbRoute
-  '/api/upload': typeof ApiUploadRoute
   '/gyms/$id': typeof GymsIdRoute
   '/inbox/$bookingId': typeof InboxBookingIdRoute
   '/trainers/$id': typeof TrainersIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/media/$name': typeof ApiMediaNameRoute
   '/api/stripe/webhook': typeof ApiStripeWebhookRoute
+  '/api/photo/$kind/$id/$slot': typeof ApiPhotoKindIdSlotRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -151,13 +151,13 @@ export interface FileRoutesByTo {
   '/onboard': typeof OnboardRoute
   '/search': typeof SearchRoute
   '/api/place-thumb': typeof ApiPlaceThumbRoute
-  '/api/upload': typeof ApiUploadRoute
   '/gyms/$id': typeof GymsIdRoute
   '/inbox/$bookingId': typeof InboxBookingIdRoute
   '/trainers/$id': typeof TrainersIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/media/$name': typeof ApiMediaNameRoute
   '/api/stripe/webhook': typeof ApiStripeWebhookRoute
+  '/api/photo/$kind/$id/$slot': typeof ApiPhotoKindIdSlotRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -172,13 +172,13 @@ export interface FileRoutesById {
   '/onboard': typeof OnboardRoute
   '/search': typeof SearchRoute
   '/api/place-thumb': typeof ApiPlaceThumbRoute
-  '/api/upload': typeof ApiUploadRoute
   '/gyms/$id': typeof GymsIdRoute
   '/inbox/$bookingId': typeof InboxBookingIdRoute
   '/trainers/$id': typeof TrainersIdRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/media/$name': typeof ApiMediaNameRoute
   '/api/stripe/webhook': typeof ApiStripeWebhookRoute
+  '/api/photo/$kind/$id/$slot': typeof ApiPhotoKindIdSlotRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -194,13 +194,13 @@ export interface FileRouteTypes {
     | '/onboard'
     | '/search'
     | '/api/place-thumb'
-    | '/api/upload'
     | '/gyms/$id'
     | '/inbox/$bookingId'
     | '/trainers/$id'
     | '/api/auth/$'
     | '/api/media/$name'
     | '/api/stripe/webhook'
+    | '/api/photo/$kind/$id/$slot'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -214,13 +214,13 @@ export interface FileRouteTypes {
     | '/onboard'
     | '/search'
     | '/api/place-thumb'
-    | '/api/upload'
     | '/gyms/$id'
     | '/inbox/$bookingId'
     | '/trainers/$id'
     | '/api/auth/$'
     | '/api/media/$name'
     | '/api/stripe/webhook'
+    | '/api/photo/$kind/$id/$slot'
   id:
     | '__root__'
     | '/'
@@ -234,13 +234,13 @@ export interface FileRouteTypes {
     | '/onboard'
     | '/search'
     | '/api/place-thumb'
-    | '/api/upload'
     | '/gyms/$id'
     | '/inbox/$bookingId'
     | '/trainers/$id'
     | '/api/auth/$'
     | '/api/media/$name'
     | '/api/stripe/webhook'
+    | '/api/photo/$kind/$id/$slot'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -255,12 +255,12 @@ export interface RootRouteChildren {
   OnboardRoute: typeof OnboardRoute
   SearchRoute: typeof SearchRoute
   ApiPlaceThumbRoute: typeof ApiPlaceThumbRoute
-  ApiUploadRoute: typeof ApiUploadRoute
   GymsIdRoute: typeof GymsIdRoute
   TrainersIdRoute: typeof TrainersIdRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiMediaNameRoute: typeof ApiMediaNameRoute
   ApiStripeWebhookRoute: typeof ApiStripeWebhookRoute
+  ApiPhotoKindIdSlotRoute: typeof ApiPhotoKindIdSlotRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -342,13 +342,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPlaceThumbRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/upload': {
-      id: '/api/upload'
-      path: '/api/upload'
-      fullPath: '/api/upload'
-      preLoaderRoute: typeof ApiUploadRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/gyms/$id': {
       id: '/gyms/$id'
       path: '/gyms/$id'
@@ -391,6 +384,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiStripeWebhookRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/photo/$kind/$id/$slot': {
+      id: '/api/photo/$kind/$id/$slot'
+      path: '/api/photo/$kind/$id/$slot'
+      fullPath: '/api/photo/$kind/$id/$slot'
+      preLoaderRoute: typeof ApiPhotoKindIdSlotRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -416,12 +416,12 @@ const rootRouteChildren: RootRouteChildren = {
   OnboardRoute: OnboardRoute,
   SearchRoute: SearchRoute,
   ApiPlaceThumbRoute: ApiPlaceThumbRoute,
-  ApiUploadRoute: ApiUploadRoute,
   GymsIdRoute: GymsIdRoute,
   TrainersIdRoute: TrainersIdRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiMediaNameRoute: ApiMediaNameRoute,
   ApiStripeWebhookRoute: ApiStripeWebhookRoute,
+  ApiPhotoKindIdSlotRoute: ApiPhotoKindIdSlotRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

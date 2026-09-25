@@ -70,7 +70,7 @@ type OverpassEl = {
 async function overpass(lat: number, lng: number, miles: number): Promise<OverpassEl[] | null> {
   const { s, n, w, e } = bbox(lat, lng, Math.min(Math.max(miles, 3), 100));
   const box = `${s},${w},${n},${e}`;
-  const query = `[out:json][timeout:22];
+  const query = `[out:json][timeout:14];
 (
   nwr["leisure"="fitness_centre"](${box});
   nwr["amenity"="gym"](${box});
@@ -95,7 +95,7 @@ out center tags;`;
           "User-Agent": "Mittwork/1.0 (live gym map)",
         },
         body: `data=${encodeURIComponent(query)}`,
-        signal: AbortSignal.timeout(24000),
+        signal: AbortSignal.timeout(15000),
       });
       if (!res.ok) continue;
       const data = (await res.json()) as { elements?: OverpassEl[] };
@@ -110,134 +110,6 @@ out center tags;`;
 function commonsUrl(value: string) {
   const file = value.replace(/^File:/i, "").trim();
   return `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(file)}?width=1200`;
-}
-
-async function wikiInfo(name: string, city: string): Promise<{ photo?: string; extract?: string }> {
-  const key = `wiki:${name}|${city}`.toLowerCase();
-  const hit = wikiCache.get(key);
-  if (hit) return hit;
-
-  try {
-    const searchUrl =
-      "https://en.wikipedia.org/w/api.php?" +
-      new URLSearchParams({
-        action: "query",
-        list: "search",
-        srsearch: `${name} ${city} gym`,
-        srlimit: "1",
-        format: "json",
-        origin: "*",
-      }).toString();
-    const searchRes = await fetch(searchUrl, {
-      headers: { "User-Agent": "Mittwork/1.0 (gym photos)", Accept: "application/json" },
-      signal: AbortSignal.timeout(5000),
-    });
-    if (searchRes.ok) {
-      const search = (await searchRes.json()) as { query?: { search?: { title: string }[] } };
-      const title = search.query?.search?.[0]?.title;
-      if (title) {
-        const pageUrl =
-          "https://en.wikipedia.org/w/api.php?" +
-          new URLSearchParams({
-            action: "query",
-            titles: title,
-            prop: "pageimages|extracts",
-            pithumbsize: "1200",
-            exintro: "1",
-            explaintext: "1",
-            format: "json",
-            origin: "*",
-          }).toString();
-        const pageRes = await fetch(pageUrl, {
-          headers: { "User-Agent": "Mittwork/1.0 (gym photos)", Accept: "application/json" },
-          signal: AbortSignal.timeout(5000),
-        });
-        if (pageRes.ok) {
-          const page = (await pageRes.json()) as {
-            query?: { pages?: Record<string, { thumbnail?: { source?: string }; extract?: string }> };
-          };
-          const first = Object.values(page.query?.pages ?? {})[0];
-          if (first?.thumbnail?.source || first?.extract) {
-            const info = { photo: first.thumbnail?.source, extract: first.extract?.slice(0, 700) };
-            wikiCache.set(key, info);
-            return info;
-          }
-        }
-      }
-    }
-  } catch {
-    /* fall through */
-  }
-
-  const titles = [name, `${name} ${city}`];
-  for (const title of titles) {
-    try {
-      const url = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`;
-      const res = await fetch(url, {
-        headers: { "User-Agent": "Mittwork/1.0 (gym photos)", Accept: "application/json" },
-        signal: AbortSignal.timeout(5000),
-      });
-      if (!res.ok) continue;
-      const data = (await res.json()) as {
-        type?: string;
-        extract?: string;
-        thumbnail?: { source?: string };
-        originalimage?: { source?: string };
-      };
-      if (data.type === "disambiguation") continue;
-      const photo = data.originalimage?.source || data.thumbnail?.source;
-      const extract = data.extract?.slice(0, 700);
-      if (photo || extract) {
-        const info = { photo, extract };
-        wikiCache.set(key, info);
-        return info;
-      }
-    } catch {
-      /* next */
-    }
-  }
-  wikiCache.set(key, {});
-  return {};
-}
-
-async function commonsPhoto(name: string, city: string): Promise<string | undefined> {
-  const key = `commons:${name}|${city}`.toLowerCase();
-  const hit = wikiCache.get(key);
-  if (hit) return hit.photo;
-  try {
-    const url =
-      "https://commons.wikimedia.org/w/api.php?" +
-      new URLSearchParams({
-        action: "query",
-        format: "json",
-        origin: "*",
-        generator: "search",
-        gsrsearch: `${name} ${city} gym`,
-        gsrnamespace: "6",
-        gsrlimit: "1",
-        prop: "imageinfo",
-        iiprop: "url",
-        iiurlwidth: "1400",
-      }).toString();
-    const res = await fetch(url, {
-      headers: { "User-Agent": "Mittwork/1.0 (gym photos)", Accept: "application/json" },
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!res.ok) {
-      wikiCache.set(key, {});
-      return undefined;
-    }
-    const data = (await res.json()) as {
-      query?: { pages?: Record<string, { imageinfo?: { thumburl?: string; url?: string }[] }> };
-    };
-    const first = Object.values(data.query?.pages ?? {})[0];
-    const photo = first?.imageinfo?.[0]?.thumburl || first?.imageinfo?.[0]?.url;
-    wikiCache.set(key, photo ? { photo } : {});
-    return photo;
-  } catch {
-    wikiCache.set(key, {});
-    return undefined;
-  }
 }
 
 async function websiteOgImage(website: string | null | undefined): Promise<string | undefined> {
@@ -404,36 +276,55 @@ export async function searchNearbyGyms(lat: number, lng: number, miles: number):
   return out;
 }
 
-export async function upsertNearbyGyms(sql: Sql, lat: number, lng: number, miles: number) {
+/**
+ * Import OSM gyms around a point. Only gyms inside the search box are loaded
+ * for de-duplication, and rows are written in a few multi-row upserts instead
+ * of one round trip per gym. Returns how many gyms were written.
+ */
+export async function upsertNearbyGyms(sql: Sql, lat: number, lng: number, miles: number): Promise<number> {
   let gyms: OsmGym[] = [];
   try {
     gyms = await searchNearbyGyms(lat, lng, miles);
   } catch {
-    return;
+    return 0;
   }
+  if (!gyms.length) return 0;
+  const { s, n, w, e } = bbox(lat, lng, Math.min(Math.max(miles, 3), 100) + 1);
   const existing = await sql<{ id: string; name: string; lat: number; lng: number }>`
     select id, name, lat, lng from gyms
+    where lat between ${s} and ${n} and lng between ${w} and ${e}
   `;
 
+  const rows = new Map<string, OsmGym>();
   for (const g of gyms) {
-    const twin = existing.find((e) => {
-      const d = milesBetween(Number(e.lat), Number(e.lng), g.lat, g.lng);
+    const key = normGymName(g.name);
+    const twin = existing.find((ex) => {
+      const d = milesBetween(Number(ex.lat), Number(ex.lng), g.lat, g.lng);
       if (d < 0.08) return true;
-      return (
-        d < 0.2 &&
-        (normGymName(e.name) === normGymName(g.name) || e.name.toLowerCase() === g.name.toLowerCase())
-      );
+      return d < 0.2 && (normGymName(ex.name) === key || ex.name.toLowerCase() === g.name.toLowerCase());
     });
     const id = twin?.id ?? g.id;
-    await sql`
-      insert into gyms (
+    if (!rows.has(id)) rows.set(id, { ...g, id });
+  }
+
+  const COLS = 18;
+  const list = [...rows.values()];
+  for (let i = 0; i < list.length; i += 200) {
+    const batch = list.slice(i, i + 200);
+    const params: unknown[] = [];
+    const tuples = batch.map((g, j) => {
+      params.push(
+        g.id, g.name, g.gymType, g.address, g.city, g.lat, g.lng, g.photoUrl, g.description, g.amenities,
+        g.hours, g.phone, g.website, g.rating, g.reviewCount, g.yelpUrl, "osm", g.wikiExtract,
+      );
+      const base = j * COLS;
+      return `(${Array.from({ length: COLS }, (_, k) => `$${base + k + 1}`).join(", ")})`;
+    });
+    await sql.query(
+      `insert into gyms (
         id, name, gym_type, address, city, lat, lng, photo_url, description, amenities, hours, phone,
         website, rating, review_count, yelp_url, source, wiki_extract
-      ) values (
-        ${id}, ${g.name}, ${g.gymType}, ${g.address}, ${g.city}, ${g.lat}, ${g.lng},
-        ${g.photoUrl}, ${g.description}, ${g.amenities}, ${g.hours}, ${g.phone},
-        ${g.website}, ${g.rating}, ${g.reviewCount}, ${g.yelpUrl}, ${"osm"}, ${g.wikiExtract}
-      )
+      ) values ${tuples.join(", ")}
       on conflict (id) do update set
         address = case when gyms.owner_user_id is not null then gyms.address else excluded.address end,
         city = case when gyms.owner_user_id is not null then gyms.city else excluded.city end,
@@ -458,9 +349,11 @@ export async function upsertNearbyGyms(sql: Sql, lat: number, lng: number, miles
         website = case when gyms.owner_user_id is not null then gyms.website else coalesce(excluded.website, gyms.website) end,
         yelp_url = coalesce(excluded.yelp_url, gyms.yelp_url),
         wiki_extract = coalesce(excluded.wiki_extract, gyms.wiki_extract),
-        source = gyms.source
-    `;
+        source = gyms.source`,
+      params,
+    );
   }
+  return list.length;
 }
 
 export function collapseDuplicateGyms<

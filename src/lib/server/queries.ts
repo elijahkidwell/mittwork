@@ -11,6 +11,7 @@ import { geocodeCity } from "@/lib/places";
 import { upsertNearbyGyms, collapseDuplicateGyms, normGymName } from "@/lib/server/nearby-gyms";
 import { placeThumbUrl } from "@/lib/place-photo";
 import { safeAppOrigin } from "@/lib/app-origin";
+import { slotsForDay, validateBookingStart, type AvailabilityWindow } from "@/lib/booking-rules";
 import {
   DEFAULT_ORIGIN,
   PLATFORM_FEE,
@@ -207,78 +208,10 @@ async function notifyBooking(sql: Sql, bookingId: string) {
 
 let seedPromise: Promise<void> | null = null;
 
-async function ensureBookingColumns(sql: Sql) {
-  await sql`alter table bookings add column if not exists duration_min int`;
-  await sql`alter table bookings add column if not exists stripe_session_id text`;
-  await sql`alter table bookings add column if not exists payout_status text`;
-  await sql`alter table bookings add column if not exists location_type text`;
-  await sql`alter table bookings add column if not exists location_note text`;
-  await sql`alter table trainers add column if not exists location_options text`;
-  await sql`alter table gyms add column if not exists owner_user_id text`;
-  await sql`alter table gyms add column if not exists gallery text`;
-  await sql`alter table gyms add column if not exists website text`;
-  await sql`alter table gyms add column if not exists rating numeric`;
-  await sql`alter table gyms add column if not exists review_count int`;
-  await sql`alter table gyms add column if not exists yelp_url text`;
-  await sql`alter table gyms add column if not exists source text`;
-  await sql`alter table gyms add column if not exists wiki_extract text`;
-  await sql`alter table trainers add column if not exists stripe_account_id text`;
-  await sql`alter table trainers add column if not exists stripe_onboarded boolean`;
-  await sql`alter table profiles add column if not exists photo_url text`;
-  await sql`alter table profiles add column if not exists bio text`;
-  await sql.query(`
-    create table if not exists gym_reviews (
-      id text primary key,
-      gym_id text not null references gyms(id) on delete cascade,
-      user_id text,
-      author_name text not null,
-      rating int not null,
-      body text not null,
-      source text not null default 'mittwork',
-      created_at timestamptz not null default now()
-    )
-  `);
-  await sql`alter table bookings add column if not exists no_show_by text`;
-  await sql`alter table bookings add column if not exists cancelled_at timestamptz`;
-  await sql`alter table bookings add column if not exists cancel_kind text`;
-  await sql.query(`
-    create table if not exists media_parts (
-      name text not null,
-      idx int not null,
-      user_id text not null,
-      mime text not null,
-      total int not null,
-      data bytea not null,
-      primary key (name, idx)
-    )
-  `);
-  await sql.query(`
-    create table if not exists trainer_messages (
-      id text primary key,
-      booking_id text not null,
-      sender_user_id text not null,
-      body text not null,
-      created_at timestamptz not null default now()
-    )
-  `);
-  await sql.query(`
-    create table if not exists notifications (
-      id text primary key,
-      user_id text not null,
-      title text not null,
-      body text not null,
-      href text,
-      read boolean not null default false,
-      created_at timestamptz not null default now()
-    )
-  `);
-}
-
 async function ensureSeed(sql: Sql) {
   if (!seedPromise) {
     seedPromise = (async () => {
-      await ensureBookingColumns(sql);
-      const rows = await sql<{ n: number }>`select count(*)::int as n from gyms`;
+        const rows = await sql<{ n: number }>`select count(*)::int as n from gyms`;
       const empty = (rows[0]?.n ?? 0) === 0;
       if (!empty) return;
 
@@ -398,6 +331,12 @@ async function refundPaidCheckout(stripeSessionId: string | null | undefined) {
   });
 }
 
+const SLOT_TAKEN = "That slot was just taken. Pick another time.";
+
+function isUniqueViolation(err: unknown) {
+  return Boolean(err && typeof err === "object" && "code" in err && (err as { code?: unknown }).code === "23505");
+}
+
 function num(v: unknown, fallback = 0): number {
   if (typeof v === "number") return v;
   if (typeof v === "string") return Number(v);
@@ -452,11 +391,44 @@ function livePhoto(url: string | null | undefined, lat: number, lng: number) {
   return placeThumbUrl(lat, lng);
 }
 
-function galleryUrls(raw: unknown): string[] {
-  return parseGallery(raw)
-    .filter((g) => g.kind === "photo" && g.url)
-    .map((g) => g.url)
-    .slice(0, 6);
+/**
+ * Older uploads are stored inline as base64 `data:` URLs. Public list/detail
+ * responses swap those for a small, cacheable `/api/photo/...` URL so a page of
+ * trainers doesn't ship megabytes of base64 JSON. Editing endpoints
+ * (getMyProfile, getMyGym) still return the raw values.
+ */
+function photoVersion(u: string) {
+  let h = 2166136261;
+  for (let i = 0; i < u.length; i += 1) {
+    h ^= u.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return `${(h >>> 0).toString(36)}${u.length.toString(36)}`;
+}
+
+function publicPhoto(url: string | null | undefined, kind: "t" | "g", id: string, slot: string): string {
+  const u = url || "";
+  if (!u.startsWith("data:image/")) return u;
+  return `/api/photo/${kind}/${encodeURIComponent(id)}/${slot}?v=${photoVersion(u)}`;
+}
+
+/** Photo URLs only (no videos), capped, with inline images swapped out. */
+function publicGallery(raw: unknown, kind: "t" | "g", id: string, max: number): string[] {
+  const out: string[] = [];
+  parseGallery(raw).forEach((g, i) => {
+    if (out.length >= max || g.kind !== "photo" || !g.url) return;
+    out.push(publicPhoto(g.url, kind, id, `g${i}`));
+  });
+  return out;
+}
+
+/** Full media list for a detail page, with inline images/posters swapped out. */
+function publicMedia(raw: unknown, kind: "t" | "g", id: string): MediaItem[] {
+  return parseGallery(raw).map((g, i) => ({
+    url: g.kind === "photo" ? publicPhoto(g.url, kind, id, `g${i}`) : g.url,
+    kind: g.kind,
+    poster: g.poster ? publicPhoto(g.poster, kind, id, `p${i}`) : undefined,
+  }));
 }
 
 function toCard(
@@ -472,7 +444,7 @@ function toCard(
     gymType: row.gym_type,
     name: row.name,
     headline: row.headline,
-    photoUrl: row.photo_url,
+    photoUrl: publicPhoto(row.photo_url, "t", row.id, "main"),
     specialties: parseList(row.specialties),
     yearsExp: num(row.years_exp),
     rating: num(row.rating),
@@ -484,9 +456,16 @@ function toCard(
     verified: Boolean(row.verified),
     miles: milesBetween(origin.lat, origin.lng, num(row.lat), num(row.lng)),
     availableNow,
-    gallery: galleryUrls(row.gallery),
+    gallery: publicGallery(row.gallery, "t", row.id, 3),
     openDays,
   };
+}
+
+async function trainerWindows(sql: Sql, trainerId: string): Promise<AvailabilityWindow[]> {
+  const rows = await sql<{ weekday: number; start_min: number; end_min: number }>`
+    select weekday, start_min, end_min from availability where trainer_id = ${trainerId}
+  `;
+  return rows.map((r) => ({ weekday: num(r.weekday), startMin: num(r.start_min), endMin: num(r.end_min) }));
 }
 
 async function availableNowSet(sql: Sql): Promise<Set<string>> {
@@ -631,7 +610,7 @@ export const getTrainer = createServerFn({ method: "GET" })
     return {
       ...toCard(t, origin, now.has(t.id)),
       bio: t.bio,
-      gallery: parseGallery(t.gallery),
+      gallery: publicMedia(t.gallery, "t", t.id),
       places: parsePlaces(t.location_options),
       gymAddress: t.gym_address,
       gymPhoto: t.gym_photo,
@@ -664,102 +643,186 @@ export type GymQuery = {
   maxMiles?: number;
   q?: string;
   hasPlace?: boolean;
+  /** Max gyms to return (default 150, hard cap 300). */
+  limit?: number;
 };
 
+type GymDbRow = {
+  id: string;
+  name: string;
+  gym_type: string;
+  address: string;
+  city: string;
+  lat: number;
+  lng: number;
+  photo_url: string;
+  gallery: unknown;
+  description: string;
+  amenities: unknown;
+  hours: string;
+  phone: string | null;
+  website: string | null;
+  rating: number | null;
+  review_count: number;
+  yelp_url: string | null;
+  wiki_extract: string | null;
+  trainer_count: number;
+};
+
+function gymCardFrom(g: GymDbRow, origin: { lat: number; lng: number }): GymCard {
+  const lat = num(g.lat);
+  const lng = num(g.lng);
+  return {
+    id: g.id,
+    name: g.name,
+    gymType: g.gym_type,
+    address: g.address,
+    city: g.city,
+    lat,
+    lng,
+    photoUrl: publicPhoto(livePhoto(g.photo_url, lat, lng), "g", g.id, "main"),
+    gallery: publicGallery(g.gallery, "g", g.id, 3),
+    description: g.description,
+    amenities: parseList(g.amenities),
+    hours: g.hours,
+    phone: g.phone,
+    website: g.website ?? null,
+    rating: g.rating != null ? num(g.rating) : null,
+    reviewCount: num(g.review_count),
+    yelpUrl: g.yelp_url ?? null,
+    wikiExtract: g.wiki_extract ?? null,
+    miles: milesBetween(origin.lat, origin.lng, lat, lng),
+    trainerCount: num(g.trainer_count),
+  };
+}
+
+/**
+ * Gyms from the database only — never waits on OpenStreetMap. Filtering,
+ * distance ordering, and the result cap all happen in SQL so the response stays
+ * small no matter how many gyms have been imported. New areas are imported by
+ * `refreshNearbyGyms`, which the client calls in the background.
+ */
 export const listGyms = createServerFn({ method: "GET" })
   .validator((input: GymQuery) => input)
   .handler(async ({ data }) => {
     try {
-    const sql = await getSql();
-    await ensureSeed(sql);
-    const origin = {
-      lat: Number(data.lat ?? DEFAULT_ORIGIN.lat),
-      lng: Number(data.lng ?? DEFAULT_ORIGIN.lng),
-    };
-    const hasPlace = (data.hasPlace === true || String(data.hasPlace) === "true") && isRealCoord(origin.lat, origin.lng);
-    const maxMilesRaw = data.maxMiles == null ? NaN : Number(data.maxMiles);
-    const maxMiles = Number.isFinite(maxMilesRaw) && maxMilesRaw > 0 ? maxMilesRaw : undefined;
-    if (hasPlace) {
-      const radius = Math.min(maxMiles ?? 25, 100);
-      await Promise.race([
-        upsertNearbyGyms(sql, origin.lat, origin.lng, radius).catch(() => undefined),
-        new Promise<void>((resolve) => setTimeout(resolve, 18000)),
-      ]);
-    }
-    const rows = await sql<{
-      id: string;
-      name: string;
-      gym_type: string;
-      address: string;
-      city: string;
-      lat: number;
-      lng: number;
-      photo_url: string;
-      gallery: unknown;
-      description: string;
-      amenities: unknown;
-      hours: string;
-      phone: string | null;
-      website: string | null;
-      rating: number | null;
-      review_count: number;
-      yelp_url: string | null;
-      wiki_extract: string | null;
-      trainer_count: number;
-    }>`
-      select g.id, g.name, g.gym_type, g.address, g.city, g.lat, g.lng, g.photo_url, g.gallery, g.description,
-             g.amenities, g.hours, g.phone, g.website, g.rating, g.review_count, g.yelp_url, g.wiki_extract,
-             (select count(*)::int from trainers t where t.gym_id = g.id) as trainer_count
-      from gyms g
-    `;
-    let list: GymCard[] = rows.map((g) => {
-      const lat = num(g.lat);
-      const lng = num(g.lng);
-      return {
-        id: g.id,
-        name: g.name,
-        gymType: g.gym_type,
-        address: g.address,
-        city: g.city,
-        lat,
-        lng,
-        photoUrl: livePhoto(g.photo_url, lat, lng),
-        gallery: galleryUrls(g.gallery),
-        description: g.description,
-        amenities: parseList(g.amenities),
-        hours: g.hours,
-        phone: g.phone,
-        website: g.website ?? null,
-        rating: g.rating != null ? num(g.rating) : null,
-        reviewCount: num(g.review_count),
-        yelpUrl: g.yelp_url ?? null,
-        wikiExtract: g.wiki_extract ?? null,
-        miles: milesBetween(origin.lat, origin.lng, lat, lng),
-        trainerCount: num(g.trainer_count),
+      const sql = await getSql();
+      await ensureSeed(sql);
+      const origin = {
+        lat: Number(data.lat ?? DEFAULT_ORIGIN.lat),
+        lng: Number(data.lng ?? DEFAULT_ORIGIN.lng),
       };
-    });
-    list = collapseDuplicateGyms(list).filter((g) => isRealCoord(g.lat, g.lng));
-    if (data.gymType) list = list.filter((g) => g.gymType === data.gymType);
-    if (data.q) {
-      const q = data.q.toLowerCase();
-      list = list.filter(
-        (g) =>
-          g.name.toLowerCase().includes(q) ||
-          g.city.toLowerCase().includes(q) ||
-          g.address.toLowerCase().includes(q),
-      );
-    }
-    if (hasPlace) list.sort((a, b) => a.miles - b.miles);
-    else list.sort((a, b) => b.trainerCount - a.trainerCount || a.name.localeCompare(b.name));
-    if (hasPlace && maxMiles) {
-      const inRange = list.filter((g) => g.miles <= maxMiles + 0.25);
-      list = inRange.length ? inRange : list.slice(0, 20);
-    }
+      const hasPlace =
+        (data.hasPlace === true || String(data.hasPlace) === "true") && isRealCoord(origin.lat, origin.lng);
+      const maxMilesRaw = data.maxMiles == null ? NaN : Number(data.maxMiles);
+      const maxMiles = Number.isFinite(maxMilesRaw) && maxMilesRaw > 0 ? maxMilesRaw : undefined;
+      const limit = Math.min(300, Math.max(1, Math.floor(Number(data.limit) || 150)));
+      const fetchN = Math.ceil(limit * 1.5) + 10;
+      const q = data.q?.trim().toLowerCase() || null;
+      const like = q ? `%${q.replace(/[%_\\]/g, (c) => `\\${c}`)}%` : null;
+      const gymType = data.gymType || null;
 
-    return list;
+      const select = (where: string, order: string, params: unknown[]) =>
+        sql.query<GymDbRow>(
+          `select g.id, g.name, g.gym_type, g.address, g.city, g.lat, g.lng, g.photo_url, g.gallery, g.description,
+                  g.amenities, g.hours, g.phone, g.website, g.rating, g.review_count, g.yelp_url, g.wiki_extract,
+                  coalesce(tc.n, 0)::int as trainer_count
+           from gyms g
+           left join (select gym_id, count(*)::int as n from trainers group by gym_id) tc on tc.gym_id = g.id
+           where ${where}
+           order by ${order}
+           limit ${fetchN}`,
+          params,
+        );
+
+      const filters: string[] = [];
+      const params: unknown[] = [];
+      const p = (v: unknown) => {
+        params.push(v);
+        return `$${params.length}`;
+      };
+      if (gymType) filters.push(`g.gym_type = ${p(gymType)}`);
+      if (like) {
+        const l = p(like);
+        filters.push(`(lower(g.name) like ${l} or lower(g.city) like ${l} or lower(g.address) like ${l})`);
+      }
+
+      let rows: GymDbRow[];
+      let order: string;
+      if (hasPlace) {
+        const la = p(origin.lat);
+        const ln = p(origin.lng);
+        const cosLat = Math.max(0.2, Math.cos((origin.lat * Math.PI) / 180));
+        order = `power(g.lat - ${la}, 2) + power((g.lng - ${ln}) * ${cosLat}, 2)`;
+        const base = [...filters];
+        const baseParams = [...params];
+        if (maxMiles) {
+          const dLat = (maxMiles + 0.25) / 69;
+          const dLng = (maxMiles + 0.25) / (cosLat * 69.17);
+          const box = [...base];
+          const boxParams = [...baseParams];
+          const bp = (v: unknown) => {
+            boxParams.push(v);
+            return `$${boxParams.length}`;
+          };
+          box.push(`g.lat between ${bp(origin.lat - dLat)} and ${bp(origin.lat + dLat)}`);
+          if (origin.lng - dLng > -180 && origin.lng + dLng < 180) {
+            box.push(`g.lng between ${bp(origin.lng - dLng)} and ${bp(origin.lng + dLng)}`);
+          }
+          rows = await select(box.join(" and ") || "true", order, boxParams);
+          const inRange = rows.filter(
+            (g) => milesBetween(origin.lat, origin.lng, num(g.lat), num(g.lng)) <= maxMiles + 0.25,
+          );
+          // Nothing in range: fall back to the nearest 20 (the map explains this).
+          rows = inRange.length ? inRange : (await select(base.join(" and ") || "true", order, baseParams)).slice(0, 20);
+        } else {
+          rows = await select(base.join(" and ") || "true", order, baseParams);
+        }
+      } else {
+        order = "trainer_count desc, g.name asc";
+        rows = await select(filters.join(" and ") || "true", order, params);
+      }
+
+      let list = rows.map((g) => gymCardFrom(g, origin));
+      list = collapseDuplicateGyms(list).filter((g) => isRealCoord(g.lat, g.lng));
+      if (hasPlace) list.sort((a, b) => a.miles - b.miles);
+      else list.sort((a, b) => b.trainerCount - a.trainerCount || a.name.localeCompare(b.name));
+      return list.slice(0, limit);
     } catch (err) {
       console.error("listGyms", err);
       return [];
+    }
+  });
+
+/** Recently refreshed areas, so repeat visits don't re-import. */
+const refreshedAreas = new Map<string, number>();
+const REFRESH_TTL = 30 * 60_000;
+
+/**
+ * Import OpenStreetMap gyms around a point into the database. Called by the
+ * client in the background after the user picks a place; the client refetches
+ * the gym list when this resolves.
+ */
+export const refreshNearbyGyms = createServerFn({ method: "POST" })
+  .validator((input: { lat: number; lng: number; miles?: number }) => input)
+  .handler(async ({ data }) => {
+    const lat = Number(data.lat);
+    const lng = Number(data.lng);
+    if (!isRealCoord(lat, lng)) return { added: 0, skipped: true };
+    const miles = Math.min(Math.max(Number(data.miles) || 25, 5), 50);
+    const key = `${lat.toFixed(2)}|${lng.toFixed(2)}|${Math.round(miles)}`;
+    const at = refreshedAreas.get(key);
+    if (at && Date.now() - at < REFRESH_TTL) return { added: 0, skipped: true };
+    refreshedAreas.set(key, Date.now());
+    try {
+      const sql = await getSql();
+      await ensureSeed(sql);
+      const added = await upsertNearbyGyms(sql, lat, lng, miles);
+      return { added, skipped: false };
+    } catch (err) {
+      refreshedAreas.delete(key);
+      console.error("refreshNearbyGyms", err);
+      return { added: 0, skipped: false };
     }
   });
 
@@ -803,8 +866,8 @@ export const getGym = createServerFn({ method: "GET" })
       city: g.city,
       lat,
       lng,
-      photoUrl: livePhoto(g.photo_url, lat, lng),
-      gallery: galleryUrls(g.gallery),
+      photoUrl: publicPhoto(livePhoto(g.photo_url, lat, lng), "g", g.id, "main"),
+      gallery: publicGallery(g.gallery, "g", g.id, 12),
       description: g.description,
       amenities: parseList(g.amenities),
       hours: g.hours,
@@ -868,48 +931,23 @@ export const listSlots = createServerFn({ method: "GET" })
     if (!svc) return [] as Slot[];
     const duration = clampDuration(data.durationMin ?? num(svc.duration_min, 60));
     const [y, m, d] = data.date.split("-").map(Number);
-    const dayDate = laWallDate(y, m, d, 12, 0);
-    const weekday = laWeekday(dayDate);
-    const windows = await sql<{ start_min: number; end_min: number }>`
-      select start_min, end_min from availability
-      where trainer_id = ${data.trainerId} and weekday = ${weekday}
-    `;
+    if (!y || !m || !d) return [] as Slot[];
+    const dayStart = laWallDate(y, m, d, 0, 0);
+    const windows = await trainerWindows(sql, data.trainerId);
+    // Only bookings that could overlap this LA day (plus max session length).
     const booked = await sql<{ start_at: string; duration_min: number | null }>`
       select start_at, duration_min from bookings
       where trainer_id = ${data.trainerId}
         and status not in ('cancelled')
         and not (status = 'pending_payment' and created_at < now() - interval '30 minutes')
+        and start_at >= ${new Date(dayStart.getTime() - 4 * 3600_000).toISOString()}
+        and start_at < ${new Date(dayStart.getTime() + 28 * 3600_000).toISOString()}
     `;
     const occupied = booked.map((b) => {
       const start = new Date(b.start_at).getTime();
-      const dur = num(b.duration_min, 60);
-      return { start, end: start + dur * 60_000 };
+      return { start, end: start + num(b.duration_min, 60) * 60_000 };
     });
-    const now = Date.now();
-    const slots: Slot[] = [];
-    for (const w of windows) {
-      for (let min = num(w.start_min); min + duration <= num(w.end_min); min += 30) {
-        const hour = Math.floor(min / 60);
-        const minute = min % 60;
-        const start = laWallDate(y, m, d, hour, minute);
-        const t0 = start.getTime();
-        const t1 = t0 + duration * 60_000;
-        if (t0 < now + 30 * 60000) continue;
-        if (occupied.some((b) => t0 < b.end && t1 > b.start)) continue;
-        slots.push({
-          startAt: start.toISOString(),
-          label: `${hour % 12 || 12}:${pad2(minute)} ${hour < 12 ? "AM" : "PM"}`,
-        });
-      }
-    }
-    return slots;
-  });
-
-export const createBooking = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator((input: { trainerId: string; serviceId: string; startAt: string; notes?: string; clientName?: string; durationMin?: number; locationType?: string; locationNote?: string }) => input)
-  .handler(async () => {
-    throw new Error("Pay with Stripe to book a session.");
+    return slotsForDay(data.date, windows, duration, occupied, Date.now()) as Slot[];
   });
 
 export const listMyBookings = createServerFn({ method: "GET" })
@@ -963,7 +1001,7 @@ export const listMyBookings = createServerFn({ method: "GET" })
           id: r.id,
           trainerId: r.trainer_id,
           trainerName: r.trainer_name || "Trainer",
-          trainerPhoto: r.trainer_photo || "",
+          trainerPhoto: publicPhoto(r.trainer_photo, "t", r.trainer_id, "main"),
           serviceName: r.service_name || "Session",
           gymName: r.gym_name || "",
           gymAddress: r.gym_address || "",
@@ -1069,7 +1107,6 @@ export const cancelBooking = createServerFn({ method: "POST" })
   .validator((id: string) => id)
   .handler(async ({ context, data: id }) => {
     const sql = await getSql();
-    await ensureBookingColumns(sql);
     const [bk] = await sql<{
       id: string;
       user_id: string;
@@ -1112,7 +1149,6 @@ export const reportNoShow = createServerFn({ method: "POST" })
   .validator((id: string) => id)
   .handler(async ({ context, data: id }) => {
     const sql = await getSql();
-    await ensureBookingColumns(sql);
     const [bk] = await sql<{
       id: string;
       user_id: string;
@@ -1156,11 +1192,18 @@ export const addReview = createServerFn({ method: "POST" })
   .validator((input: { bookingId: string; rating: number; body: string }) => input)
   .handler(async ({ context, data }) => {
     const sql = await getSql();
-    const [bk] = await sql<{ trainer_id: string; client_name: string | null }>`
-      select trainer_id, client_name from bookings
+    const [bk] = await sql<{ trainer_id: string; client_name: string | null; status: string; start_at: string }>`
+      select trainer_id, client_name, status, start_at from bookings
       where id = ${data.bookingId} and user_id = ${context.userId}
     `;
     if (!bk) throw new Error("Booking not found");
+    if (bk.status !== "confirmed" || new Date(bk.start_at).getTime() > Date.now()) {
+      throw new Error("You can review a session after it happens.");
+    }
+    const [already] = await sql<{ id: string }>`
+      select id from reviews where booking_id = ${data.bookingId} and user_id = ${context.userId} limit 1
+    `;
+    if (already) throw new Error("You already reviewed this session.");
     const rating = Math.min(5, Math.max(1, Math.round(data.rating)));
     const id = `rv_${crypto.randomUUID()}`;
     await sql`
@@ -1170,10 +1213,12 @@ export const addReview = createServerFn({ method: "POST" })
         ${bk.client_name || "Client"}, ${rating}, ${data.body.trim()}
       )
     `;
+    // Fold the new rating into the listed average instead of recounting the
+    // reviews table (catalog trainers list more reviews than rows exist).
     await sql`
       update trainers set
-        review_count = (select count(*)::int from reviews where trainer_id = ${bk.trainer_id}),
-        rating = (select avg(rating) from reviews where trainer_id = ${bk.trainer_id})
+        rating = round(((rating * review_count) + ${rating}) / (review_count + 1)::numeric, 2),
+        review_count = review_count + 1
       where id = ${bk.trainer_id}
     `;
     return { ok: true };
@@ -1239,7 +1284,7 @@ export const getMyProfile = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     const sql = await getSql();
-    await repairTrainerPins(sql);
+    await repairTrainerPins(sql, context.userId);
     const existing = await sql<{ user_id: string }>`
       select user_id from profiles where user_id = ${context.userId}
     `;
@@ -1384,13 +1429,6 @@ export const updateMyProfile = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
-export const createUploadTicket = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .handler(async ({ context }) => {
-    const { signUploadTicket } = await import("@/lib/server/upload-ticket");
-    return { token: signUploadTicket(context.userId) };
-  });
-
 export const saveMyPhoto = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: { photoUrl: string }) => input)
@@ -1409,42 +1447,15 @@ export const saveMyPhoto = createServerFn({ method: "POST" })
     return { ok: true, photoUrl: url };
   });
 
-export const uploadMyPhoto = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator((input: { dataUrl: string }) => input)
-  .handler(async ({ context, data }) => {
-    const url = data.dataUrl.trim();
-    if (!url.startsWith("data:image/")) throw new Error("Could not read that photo.");
-    if (url.length > 450_000) throw new Error("Photo is too large. Try another shot.");
-    const sql = await getSql();
-    await sql`
-      insert into profiles (user_id, role, photo_url)
-      values (${context.userId}, 'client', ${url})
-      on conflict (user_id) do update set photo_url = ${url}
-    `;
-    await sql`update trainers set photo_url = ${url} where user_id = ${context.userId}`;
-    return { url };
-  });
-
-export const appendMediaChunk = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator((input: { id: string; chunk: string; last: boolean; mime: string }) => input)
-  .handler(async ({ context, data }) => {
-    const { savePart, partsComplete, mediaFileName } = await import("@/lib/server/media-store");
-    const id = data.id.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 24);
-    if (!id) throw new Error("Bad upload.");
-    const mime = data.mime || "application/octet-stream";
-    await savePart({
-      userId: context.userId,
-      id,
-      index: Date.now() % 1_000_000,
-      total: 1,
-      mime,
-      chunkBase64: data.chunk,
-    });
-    if (!data.last) return { url: null as string | null };
-    return { url: `/api/media/${mediaFileName(context.userId, id, mime)}` };
-  });
+const UPLOAD_MIMES = new Set([
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+  "video/x-m4v",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
 
 export const putMediaPart = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
@@ -1453,6 +1464,8 @@ export const putMediaPart = createServerFn({ method: "POST" })
     const { savePart } = await import("@/lib/server/media-store");
     const id = data.id.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 24);
     if (!id) throw new Error("Bad upload.");
+    const mime = (data.mime || "video/mp4").split(";")[0]!.trim().toLowerCase();
+    if (!UPLOAD_MIMES.has(mime)) throw new Error("Use a photo (JPG/PNG/WebP) or a video.");
     const index = Math.max(0, Math.floor(Number(data.index)));
     const total = Math.max(1, Math.floor(Number(data.total)));
     if (index >= total || total > 800) throw new Error("Bad upload.");
@@ -1461,7 +1474,7 @@ export const putMediaPart = createServerFn({ method: "POST" })
       id,
       index,
       total,
-      mime: data.mime || "video/mp4",
+      mime,
       chunkBase64: data.chunk,
     });
     return { ok: true as const };
@@ -1474,7 +1487,8 @@ export const finishMediaParts = createServerFn({ method: "POST" })
     const { partsComplete } = await import("@/lib/server/media-store");
     const id = data.id.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 24);
     const total = Math.max(1, Math.floor(Number(data.total)));
-    const url = await partsComplete(context.userId, id, data.mime || "video/mp4", total);
+    const mime = (data.mime || "video/mp4").split(";")[0]!.trim().toLowerCase();
+    const url = await partsComplete(context.userId, id, mime, total);
     return { url };
   });
 
@@ -1575,9 +1589,10 @@ async function resolveHometown(
   throw new Error("Pick a hometown from the city list so we can place you on the map.");
 }
 
-async function repairTrainerPins(sql: Sql) {
+/** Re-geocode the signed-in trainer's pin if it's missing (was: every trainer, on every profile load). */
+async function repairTrainerPins(sql: Sql, userId: string) {
   const rows = await sql<{ id: string; city: string; lat: number; lng: number; gym_id: string }>`
-    select id, city, lat, lng, gym_id from trainers
+    select id, city, lat, lng, gym_id from trainers where user_id = ${userId}
   `;
   for (const t of rows) {
     if (isRealCoord(num(t.lat), num(t.lng))) continue;
@@ -1591,7 +1606,6 @@ async function findOrCreateGym(
   sql: Sql,
   input: { gymId?: string; gymName?: string; city?: string; lat?: number; lng?: number },
 ) {
-  await ensureBookingColumns(sql);
   if (input.gymId) {
     const [row] = await sql<{ id: string; city: string; lat: number; lng: number }>`
       select id, city, lat, lng from gyms where id = ${input.gymId}
@@ -1881,7 +1895,6 @@ export const sendBookingMessage = createServerFn({ method: "POST" })
     const text = (data.body || "").trim();
     if (!text) throw new Error("Type a message first.");
     const sql = await getSql();
-    await ensureBookingColumns(sql);
     const [bk] = await sql<{ id: string; user_id: string; trainer_id: string }>`
       select b.id, b.user_id, b.trainer_id from bookings b
       where b.id = ${data.bookingId}
@@ -1916,7 +1929,6 @@ export const listBookingMessages = createServerFn({ method: "GET" })
   .validator((bookingId: string) => bookingId)
   .handler(async ({ context, data: bookingId }) => {
     const sql = await getSql();
-    await ensureBookingColumns(sql);
     const [bk] = await sql<{ user_id: string; trainer_id: string }>`
       select user_id, trainer_id from bookings where id = ${bookingId}
     `;
@@ -1936,7 +1948,6 @@ export const listInbox = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     const sql = await getSql();
-    await ensureBookingColumns(sql);
     const [mine] = await sql<{ id: string | null }>`
       select id from trainers where user_id = ${context.userId} limit 1
     `;
@@ -1947,6 +1958,7 @@ export const listInbox = createServerFn({ method: "GET" })
       service_name: string;
       trainer_name: string;
       trainer_photo: string;
+      trainer_id: string;
       client_name: string | null;
       client_photo: string | null;
       user_id: string;
@@ -1955,7 +1967,7 @@ export const listInbox = createServerFn({ method: "GET" })
       last_at: string | null;
     }>`
       select b.id, b.start_at, b.status, coalesce(s.name, 'Session') as service_name,
-             t.name as trainer_name, t.photo_url as trainer_photo,
+             t.name as trainer_name, t.photo_url as trainer_photo, t.id as trainer_id,
              b.client_name, p.photo_url as client_photo, b.user_id, t.user_id as trainer_user_id,
              (select m.body from trainer_messages m where m.booking_id = b.id order by m.created_at desc limit 1) as last_body,
              (select m.created_at from trainer_messages m where m.booking_id = b.id order by m.created_at desc limit 1) as last_at
@@ -1978,7 +1990,7 @@ export const listInbox = createServerFn({ method: "GET" })
         status: r.status,
         serviceName: r.service_name,
         otherName: iAmTrainer ? r.client_name || "Client" : r.trainer_name,
-        otherPhoto: iAmTrainer ? r.client_photo : r.trainer_photo,
+        otherPhoto: iAmTrainer ? r.client_photo : publicPhoto(r.trainer_photo, "t", r.trainer_id, "main"),
         lastBody: r.last_body,
         lastAt: r.last_at ? String(r.last_at) : null,
       };
@@ -2026,10 +2038,13 @@ export const claimGym = createServerFn({ method: "POST" })
   .validator((input: { gymId?: string; gymName?: string; description?: string; hours?: string; phone?: string; photoUrl?: string; gallery?: string[] }) => input)
   .handler(async ({ context, data }) => {
     const sql = await getSql();
-    await ensureBookingColumns(sql);
     const [tr] = await sql<{ gym_id: string }>`select gym_id from trainers where user_id = ${context.userId} limit 1`;
-    const gymId = data.gymId || tr?.gym_id;
+    if (!tr) throw new Error("Publish your trainer profile first, then claim the gym you train out of.");
+    const gymId = data.gymId || tr.gym_id;
     if (!gymId) throw new Error("Pick a gym to claim.");
+    if (gymId !== tr.gym_id) {
+      throw new Error("You can only claim the gym on your trainer profile. Save your profile first.");
+    }
     const [g] = await sql<{ id: string; owner_user_id: string | null }>`
       select id, owner_user_id from gyms where id = ${gymId}
     `;
@@ -2055,7 +2070,6 @@ export const getMyGym = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     const sql = await getSql();
-    await ensureBookingColumns(sql);
     const [g] = await sql<{
       id: string;
       name: string;
@@ -2091,12 +2105,37 @@ export const addGymReview = createServerFn({ method: "POST" })
     const rating = Math.min(5, Math.max(1, Math.round(data.rating)));
     const body = data.body.trim();
     if (body.length < 8) throw new Error("Write a bit more about the gym.");
-    const id = `gr_${crypto.randomUUID().slice(0, 10)}`;
     const name = data.authorName?.trim() || "Mittwork athlete";
-    await sql`
-      insert into gym_reviews (id, gym_id, user_id, author_name, rating, body, source)
-      values (${id}, ${data.gymId}, ${context.userId}, ${name}, ${rating}, ${body}, ${"mittwork"})
+    const [gym] = await sql<{ id: string }>`select id from gyms where id = ${data.gymId}`;
+    if (!gym) throw new Error("Gym not found.");
+    // One review per person per gym: posting again updates your review.
+    const [mine] = await sql<{ id: string }>`
+      select id from gym_reviews
+      where gym_id = ${data.gymId} and user_id = ${context.userId} and source = 'mittwork'
+      order by created_at desc limit 1
     `;
+    let id = mine?.id ?? `gr_${crypto.randomUUID().slice(0, 10)}`;
+    if (mine) {
+      await sql`
+        update gym_reviews set rating = ${rating}, body = ${body}, author_name = ${name}, created_at = now()
+        where id = ${mine.id}
+      `;
+    } else {
+      try {
+        await sql`
+          insert into gym_reviews (id, gym_id, user_id, author_name, rating, body, source)
+          values (${id}, ${data.gymId}, ${context.userId}, ${name}, ${rating}, ${body}, ${"mittwork"})
+        `;
+      } catch (err) {
+        if (!isUniqueViolation(err)) throw err;
+        const [row] = await sql<{ id: string }>`
+          update gym_reviews set rating = ${rating}, body = ${body}, author_name = ${name}, created_at = now()
+          where gym_id = ${data.gymId} and user_id = ${context.userId} and source = 'mittwork'
+          returning id
+        `;
+        id = row?.id ?? id;
+      }
+    }
     const stats = await sql<{ avg: number; n: number }>`
       select avg(rating)::float as avg, count(*)::int as n from gym_reviews where gym_id = ${data.gymId}
     `;
@@ -2104,67 +2143,7 @@ export const addGymReview = createServerFn({ method: "POST" })
       update gyms set rating = ${stats[0]?.avg ?? rating}, review_count = ${stats[0]?.n ?? 1}
       where id = ${data.gymId}
     `;
-    return { id };
-  });
-
-export const stripeStatus = createServerFn({ method: "GET" }).handler(async () => {
-  const { stripeEnabled, stripePublishable, maskKey, stripeOwnerUserId } = await import("@/lib/server/stripe");
-  const enabled = await stripeEnabled();
-  const pub = await stripePublishable();
-  return {
-    enabled,
-    publishableKey: pub ? maskKey(pub) : null,
-    ownerUserId: (await stripeOwnerUserId()) ?? null,
-  };
-});
-
-export const savePlatformStripeKeys = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator((input: { secretKey: string; publishableKey: string }) => input)
-  .handler(async ({ context, data }) => {
-    const secret = data.secretKey.trim();
-    const publishable = data.publishableKey.trim();
-    if (!secret.startsWith("sk_") && !secret.startsWith("rk_")) {
-      throw new Error("Secret key should start with sk_live_, sk_test_, or rk_live_.");
-    }
-    if (!publishable.startsWith("pk_")) throw new Error("Publishable key should start with pk_live_ or pk_test_.");
-    if (secret.includes("…") || secret.includes("...")) {
-      throw new Error("Paste the full secret key from Stripe — the short sk_live_…JoBJ version will not work.");
-    }
-    const { stripeEnabled } = await import("@/lib/server/stripe");
-    if (await stripeEnabled()) {
-      throw new Error("Platform Stripe is already configured.");
-    }
-    const Stripe = (await import("stripe")).default;
-    const stripe = new Stripe(secret);
-    try {
-      await stripe.balance.retrieve();
-    } catch {
-      throw new Error("Stripe rejected that secret key. Copy it again from Developers → API keys.");
-    }
-    const sql = await getSql();
-    await sql.query(`
-      create table if not exists platform_settings (
-        id text primary key,
-        stripe_secret_key text,
-        stripe_publishable_key text,
-        owner_user_id text,
-        updated_at timestamptz not null default now()
-      )
-    `);
-    await sql.query(
-      `insert into platform_settings (id, stripe_secret_key, stripe_publishable_key, owner_user_id, updated_at)
-       values ('default', $1, $2, $3, now())
-       on conflict (id) do update set
-         stripe_secret_key = excluded.stripe_secret_key,
-         stripe_publishable_key = excluded.stripe_publishable_key,
-         owner_user_id = excluded.owner_user_id,
-         updated_at = now()`,
-      [secret, publishable, context.userId],
-    );
-    const { clearStripeCache, maskKey } = await import("@/lib/server/stripe");
-    clearStripeCache();
-    return { ok: true as const, publishableKey: maskKey(publishable) };
+    return { id, updated: Boolean(mine) };
   });
 
 export const getEarnings = createServerFn({ method: "GET" })
@@ -2288,7 +2267,6 @@ export const createStripeCheckout = createServerFn({ method: "POST" })
   )
   .handler(async ({ context, data }) => {
     const sql = await getSql();
-    await ensureBookingColumns(sql);
     await expireStaleHolds(sql);
     const { getStripe, splitAmount, stripeEnabled } = await import("@/lib/server/stripe");
     const [svc] = await sql<{ id: string; name: string; price_cents: number; trainer_id: string; duration_min: number }>`
@@ -2306,12 +2284,17 @@ export const createStripeCheckout = createServerFn({ method: "POST" })
     `;
     if (!trainer) throw new Error("Trainer not found");
     const duration = clampDuration(data.durationMin ?? num(svc.duration_min, 60));
+    const windows = await trainerWindows(sql, data.trainerId);
+    const invalid = validateBookingStart(data.startAt, duration, windows, Date.now());
+    if (invalid) throw new Error(invalid);
+    const startMs = new Date(data.startAt).getTime();
+    const endMs = startMs + duration * 60_000;
     const clashRows = await sql<{ start_at: string; duration_min: number | null; status: string; created_at: string }>`
       select start_at, duration_min, status, created_at from bookings
       where trainer_id = ${data.trainerId} and status != 'cancelled'
+        and start_at >= ${new Date(startMs - 4 * 3600_000).toISOString()}
+        and start_at < ${new Date(endMs).toISOString()}
     `;
-    const startMs = new Date(data.startAt).getTime();
-    const endMs = startMs + duration * 60_000;
     const holdCutoff = Date.now() - 30 * 60_000;
     const clash = clashRows.some((b) => {
       if (b.status === "pending_payment" && new Date(b.created_at).getTime() < holdCutoff) return false;
@@ -2319,7 +2302,7 @@ export const createStripeCheckout = createServerFn({ method: "POST" })
       const z = a + num(b.duration_min, 60) * 60_000;
       return startMs < z && endMs > a;
     });
-    if (clash) throw new Error("That slot was just taken. Pick another time.");
+    if (clash) throw new Error(SLOT_TAKEN);
     const amount = priceForDuration(num(svc.price_cents), num(svc.duration_min, 60), duration);
     const { feeCents, trainerCents } = splitAmount(amount);
     const chargeCents = stripeGrossCharge(amount);
@@ -2335,18 +2318,10 @@ export const createStripeCheckout = createServerFn({ method: "POST" })
       throw new Error("Add the gym, address, or park for this session.");
     }
 
+    // Never confirm a booking without payment. If Stripe isn't configured the
+    // site can't take bookings yet.
     if (!(await stripeEnabled())) {
-      await sql`
-        insert into bookings (
-          id, user_id, trainer_id, service_id, gym_id, start_at, status,
-          amount_cents, fee_cents, notes, client_name, payout_status, duration_min, location_type, location_note
-        ) values (
-          ${id}, ${context.userId}, ${data.trainerId}, ${data.serviceId}, ${trainer.gym_id},
-          ${data.startAt}, 'confirmed', ${amount}, ${feeCents}, ${data.notes ?? null}, ${name}, ${"demo"}, ${duration}, ${loc}, ${locNote}
-        )
-      `;
-      await notifyBooking(sql, id);
-      return { mode: "demo" as const, bookingId: id, url: null };
+      throw new Error("Bookings aren’t open yet — payments are still being set up. Please check back soon.");
     }
 
     const stripe = await getStripe();
@@ -2371,15 +2346,22 @@ export const createStripeCheckout = createServerFn({ method: "POST" })
       throw new Error("This coach isn’t taking payments yet.");
     }
 
-    await sql`
-      insert into bookings (
-        id, user_id, trainer_id, service_id, gym_id, start_at, status,
-        amount_cents, fee_cents, notes, client_name, payout_status, duration_min, location_type, location_note
-      ) values (
-        ${id}, ${context.userId}, ${data.trainerId}, ${data.serviceId}, ${trainer.gym_id},
-        ${data.startAt}, 'pending_payment', ${amount}, ${feeCents}, ${data.notes ?? null}, ${name}, ${"pending"}, ${duration}, ${loc}, ${locNote}
-      )
-    `;
+    try {
+      await sql`
+        insert into bookings (
+          id, user_id, trainer_id, service_id, gym_id, start_at, status,
+          amount_cents, fee_cents, notes, client_name, payout_status, duration_min, location_type, location_note
+        ) values (
+          ${id}, ${context.userId}, ${data.trainerId}, ${data.serviceId}, ${trainer.gym_id},
+          ${new Date(startMs).toISOString()}, 'pending_payment', ${amount}, ${feeCents}, ${data.notes ?? null}, ${name}, ${"pending"}, ${duration}, ${loc}, ${locNote}
+        )
+      `;
+    } catch (err) {
+      // bookings_trainer_slot_active_uidx (migration 0010) rejects a second
+      // active booking for the same trainer + start time.
+      if (isUniqueViolation(err)) throw new Error(SLOT_TAKEN);
+      throw err;
+    }
 
     const origin = safeAppOrigin(data.origin);
     const params: Record<string, unknown> = {
