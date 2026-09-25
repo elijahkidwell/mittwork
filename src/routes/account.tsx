@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, createFileRoute } from "@tanstack/react-router";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { NeedSignIn } from "@/components/auth/need-sign-in";
 import { GalleryEditor, PhotoPicker } from "@/components/media/uploader";
@@ -17,7 +17,6 @@ import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { STYLES } from "@/lib/catalog";
 import { ALL_PLACE_IDS, type SessionPlaceId } from "@/lib/locations";
 import { openExternal } from "@/lib/open-external";
-import { useOrigin } from "@/lib/origin";
 import type { MediaItem } from "@/lib/media";
 import {
   becomeTrainer,
@@ -47,12 +46,6 @@ function AccountForm() {
   const { user } = useCurrentUserState();
   const qc = useQueryClient();
   const profile = useQuery({ queryKey: ["profile"], queryFn: () => getMyProfile(), enabled: !!user });
-  const gyms = useQuery({
-    queryKey: ["gyms-all"],
-    queryFn: () => listGyms({ data: {} }),
-  });
-
-  const origin = useOrigin();
   const [displayName, setDisplayName] = useState("");
   const [phone, setPhone] = useState("");
   const [city, setCity] = useState("");
@@ -70,19 +63,39 @@ function AccountForm() {
   const [menu, setMenu] = useState<MenuRow[]>([emptyService()]);
   const [busy, setBusy] = useState(false);
   const [showTrainer, setShowTrainer] = useState(false);
+  // Gyms near the trainer's home base (not every gym in the database) for the gym picker.
+  const gymLat = homeLat == null ? null : Math.round(homeLat * 100) / 100;
+  const gymLng = homeLng == null ? null : Math.round(homeLng * 100) / 100;
+  const gyms = useQuery({
+    queryKey: ["gyms-for-account", gymLat, gymLng],
+    queryFn: () =>
+      listGyms({
+        data: gymLat == null || gymLng == null ? { limit: 150 } : { lat: gymLat, lng: gymLng, hasPlace: true, limit: 150 },
+      }),
+    placeholderData: keepPreviousData,
+  });
 
+  // Fill the form from the saved profile once (and the trainer part once it exists),
+  // so background refetches after a save don't wipe edits in progress.
+  const filled = useRef({ base: false, trainer: false });
   useEffect(() => {
     if (!profile.data) return;
-    setDisplayName(profile.data.displayName || user?.displayName || "");
-    setPhone(profile.data.phone || "");
-    setCity(profile.data.city || profile.data.trainer?.city || "");
-    if (profile.data.trainer && Number.isFinite(profile.data.trainer.lat)) {
-      setHomeLat(profile.data.trainer.lat);
-      setHomeLng(profile.data.trainer.lng);
+    if (filled.current.base && (filled.current.trainer || !profile.data.trainer)) return;
+    const fillBase = !filled.current.base;
+    filled.current.base = true;
+    if (fillBase) {
+      setDisplayName(profile.data.displayName || user?.displayName || "");
+      setPhone(profile.data.phone || "");
+      setCity(profile.data.city || profile.data.trainer?.city || "");
+      if (profile.data.trainer && Number.isFinite(profile.data.trainer.lat)) {
+        setHomeLat(profile.data.trainer.lat);
+        setHomeLng(profile.data.trainer.lng);
+      }
+      setBio(profile.data.bio || profile.data.trainer?.bio || "");
+      setPhotoUrl(profile.data.photoUrl || profile.data.trainer?.photoUrl || user?.profileImageUrl || "");
     }
-    setBio(profile.data.bio || profile.data.trainer?.bio || "");
-    setPhotoUrl(profile.data.photoUrl || profile.data.trainer?.photoUrl || user?.profileImageUrl || "");
-    if (profile.data.trainer) {
+    if (profile.data.trainer && !filled.current.trainer) {
+      filled.current.trainer = true;
       setHeadline(profile.data.trainer.headline);
       setYearsExp(profile.data.trainer.yearsExp);
       setGymId(profile.data.trainer.gymId);
@@ -184,6 +197,8 @@ function AccountForm() {
           });
         }
       }
+      // Re-read the trainer section once so new services pick up their saved ids.
+      filled.current.trainer = false;
       await qc.invalidateQueries({ queryKey: ["profile"] });
       toast.success("Profile saved.");
     } catch (err) {

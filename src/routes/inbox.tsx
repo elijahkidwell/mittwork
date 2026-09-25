@@ -43,7 +43,9 @@ function InboxList() {
       {q.isError ? (
         <p className="text-sm text-danger">Couldn’t load messages. Pull to retry.</p>
       ) : null}
-      {rows.length === 0 ? (
+      {q.isPlaceholderData ? (
+        <p className="text-sm text-muted">Loading messages…</p>
+      ) : rows.length === 0 ? (
         <p className="text-sm text-muted">No threads yet. Book a session and you can message from here.</p>
       ) : (
         <ul className="divide-y divide-border">

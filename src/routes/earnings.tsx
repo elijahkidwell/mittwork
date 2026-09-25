@@ -98,6 +98,8 @@ function EarningsPage() {
 
       {q.isError ? (
         <p className="text-sm text-muted">Couldn’t load earnings. Pull to refresh.</p>
+      ) : q.isPlaceholderData ? (
+        <p className="text-sm text-muted">Loading earnings…</p>
       ) : !d.trainer ? (
         <div className="rounded-xl bg-elevated p-5">
           <p className="font-medium">Trainer profile needed</p>

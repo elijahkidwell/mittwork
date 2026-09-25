@@ -7,7 +7,7 @@ import { useOrigin } from "@/lib/origin";
 import { cn } from "@/lib/utils";
 import { useQuery } from "@tanstack/react-query";
 import { getMyProfile, listMyBookings, listNotifications, listTrainerSessions } from "@/lib/server/queries";
-import { enablePushReminders, tickBookingReminders } from "@/lib/reminders";
+import { tickBookingReminders } from "@/lib/reminders";
 
 const NAV = [
   { to: "/search", label: "Browse", icon: Search },
@@ -124,13 +124,8 @@ function ReminderBridge() {
     enabled: !isPending && !!user,
     refetchInterval: 60_000,
   });
-  useEffect(() => {
-    if (!user) return;
-    const t = window.setTimeout(() => {
-      void enablePushReminders();
-    }, 1500);
-    return () => window.clearTimeout(t);
-  }, [user]);
+  // Notification permission is only requested from the explicit "Turn on reminders" button
+  // on /bookings; prompting on every page load is blocked by browsers and annoys people.
   useEffect(() => {
     if (!user) return;
     const rows = [
@@ -197,6 +192,8 @@ function NotifyBell() {
     refetchInterval: 20_000,
   });
   const unread = (data ?? []).filter((n) => !n.read).length;
+  // Hold the bell's space while auth resolves so the header doesn't jump.
+  if (isPending) return <div className="size-11" aria-hidden />;
   if (!user) return null;
   return (
     <Link

@@ -34,7 +34,7 @@ function Thread({ userId, bookingId }: { userId: string; bookingId: string }) {
     queryKey: ["thread", bookingId],
     queryFn: () => listBookingMessages({ data: bookingId }),
     enabled: !!userId,
-    refetchInterval: 3000,
+    refetchInterval: 5000,
   });
   const send = useMutation({
     mutationFn: (text: string) => sendBookingMessage({ data: { bookingId, body: text } }),
