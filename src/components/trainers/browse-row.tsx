@@ -1,7 +1,7 @@
 import { Calendar, Star } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import type { TrainerCard as T } from "@/lib/server/queries";
-import { formatMiles, formatPrice } from "@/lib/utils";
+import { formatMiles, formatPrice, laWeekday } from "@/lib/utils";
 
 const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -14,7 +14,7 @@ function bucks(cents: number) {
 export function BrowseRow({ trainer: t, showDistance }: { trainer: T; showDistance: boolean }) {
   const shots = [t.photoUrl, ...t.gallery.filter((u) => u !== t.photoUrl)].slice(0, 4);
   while (shots.length < 4) shots.push(t.photoUrl);
-  const today = new Date().getDay();
+  const today = laWeekday(); // open days are on the LA calendar
 
   return (
     <Link to="/trainers/$id" params={{ id: t.id }} className="block space-y-3 py-4">

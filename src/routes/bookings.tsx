@@ -26,7 +26,7 @@ import {
   type BookingRow,
   type TrainerSession,
 } from "@/lib/server/queries";
-import { cn, formatMoney, pad2 } from "@/lib/utils";
+import { cn, formatDayLA, formatMoney, formatTimeLA, laDayKey, pad2 } from "@/lib/utils";
 
 export const Route = createFileRoute("/bookings")({
   component: BookingsPage,
@@ -58,42 +58,23 @@ function BookingsPage() {
   return <BookingsAuthed />;
 }
 
-function parseDay(iso: string) {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? null : d;
+/** Calendar-cell key for a grid day (a plain calendar date, no time zone math). */
+function cellKey(d: Date) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
-function dayKey(d: Date | string) {
-  const x = typeof d === "string" ? parseDay(d) : d;
-  if (!x) return "unknown";
-  return `${x.getFullYear()}-${pad2(x.getMonth() + 1)}-${pad2(x.getDate())}`;
+/** Sessions happen in LA, so group and label them on the LA calendar. */
+function sessionDayKey(iso: string) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "unknown" : laDayKey(d);
 }
 
 function dayLabel(iso: string) {
-  const d = parseDay(iso);
-  if (!d) return "Date TBD";
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      weekday: "long",
-      month: "short",
-      day: "numeric",
-    }).format(d);
-  } catch {
-    return d.toDateString();
-  }
+  return formatDayLA(iso) || "Date TBD";
 }
 
 function timeLabel(iso: string) {
-  const d = parseDay(iso);
-  if (!d) return "";
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-    }).format(d);
-  } catch {
-    return "";
-  }
+  return formatTimeLA(iso);
 }
 
 function BookingsAuthed() {
@@ -241,7 +222,9 @@ function BookingsAuthed() {
         </>
       )}
 
-      {upcoming.length + past.length === 0 && !bookings.isFetching ? (
+      {bookings.isPlaceholderData ? (
+        <p className="text-sm text-muted">Loading bookings…</p>
+      ) : upcoming.length + past.length === 0 ? (
         <p className="text-sm text-muted">{isTrainer ? "You haven’t booked a session as a trainee." : "Nothing on the books. Find a coach and grab a slot."}</p>
       ) : bookings.data ? (
         <>
@@ -356,13 +339,13 @@ function BookingsAuthed() {
 function TrainerCalendar({ sessions, loading }: { sessions: TrainerSession[]; loading: boolean }) {
   const now = new Date();
   const [cursor, setCursor] = useState(() => new Date(now.getFullYear(), now.getMonth(), 1));
-  const [selected, setSelected] = useState(() => dayKey(now));
+  const [selected, setSelected] = useState(() => laDayKey(now));
 
   const byDay = useMemo(() => {
     const map = new Map<string, TrainerSession[]>();
     for (const s of sessions) {
       if (s.status === "cancelled" || s.status === "pending_payment") continue;
-      const k = dayKey(s.startAt);
+      const k = sessionDayKey(s.startAt);
       const list = map.get(k) ?? [];
       list.push(s);
       map.set(k, list);
@@ -435,11 +418,11 @@ function TrainerCalendar({ sessions, loading }: { sessions: TrainerSession[]; lo
         </div>
         <div className="grid grid-cols-7">
           {weeks.flat().map((day, i) => {
-            const k = dayKey(day);
+            const k = cellKey(day);
             const inMonth = day.getMonth() === cursor.getMonth();
             const count = byDay.get(k)?.length ?? 0;
             const isSel = k === selected;
-            const isToday = k === dayKey(now);
+            const isToday = k === laDayKey(now);
             return (
               <button
                 key={`${k}-${i}`}
